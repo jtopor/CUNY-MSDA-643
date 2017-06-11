@@ -1,0 +1,296 @@
+---
+title: "DATA 643 Project 1: Global Baseline Predictors and RMSE"
+author: "James Topor"
+date: "June 5, 2017"
+output: html_document
+---
+
+### Introduction
+
+*Briefly describe the recommender system that you're going to build out from a business perspective*
+
+The purpose of this assignment is to employ a publicly available data to explore the way in which to construct a user-item matrix and subsequently calculate raw averages, root mean square errors (RMSE), user and item biases, and global baseline predictors. While the goal of the assignment does not include the development of a fully functional recommender system, the concepts explored herein are often used in the development of such systems.
+
+_____
+
+### Data Set
+
+The data set used for this assignment is a subset of the __Jester__ Online Joke Recommender System. Specifically, a subset containing data from 24,938 users who have rated between 15 and 35 out of 100 possible jokes was downloaded from the following website:
+
+- http://www.ieor.berkeley.edu/~goldberg/jester-data/
+
+From that site a file named __jester-data-3.zip__ containing a compressed Excel file was downloaded and decompressed. Excel was then used to convert the resulting EXcel file to CSV format. The CSV file exceeds 8 megabytes in size, thereby indicating that the amount of data contained therein might be too extensive for purposes of this assignment. As such, the following code snippet was used to produce a much smaller sample of the CSV file:
+
+```{r, eval = FALSE}
+# original data source: http://www.ieor.berkeley.edu/~goldberg/jester-data/
+# load CSV version of jester subset
+jester <- read.csv("c:/data/643/jester-data-3.csv", header = FALSE)
+
+# truncate data set to first 20 rows (users) and first 19 items (jokes)
+jester <- jester[0:20,2:20]
+
+# set all 99's to NA
+jester[,][jester[,] == 99] <- NA
+
+# delete any columns that are 100% NA's
+jester <- jester[ , colSums(!is.na(jester)) > 0]
+
+write.csv(jester, "c:/data/643/P1Data.csv", col.names = FALSE, row.names = FALSE)
+```
+
+
+The __P1Data.csv__ file was then loaded into a Github repository for use here. The contents of the file are shown below.
+
+```{r}
+jester <- read.csv("https://raw.githubusercontent.com/jtopor/CUNY-MSDA-643/master/P1/P1Data.csv")
+jester
+```
+
+Each row within the data frame represents a single user, while each column represents a single joke (or "item") for which users may have provided a rating. As such, the contents of the data frame shown above comprise a user-item matrix. The ratings themselves fall within the range of [-10, 10], with -10 being the lowest possible rating and 10 being the highest. In the data frame shown above we can also see a fairly significant number of missing ratings, as indicated by the 'NA' values. In the original file missing ratings were indicated by a value of "99"; however, the 99's were replaced with "NA" in the code snippet shown earlier for simplification purposes.
+
+_____
+
+### Creating Training and Testing Subsets
+
+Creating separate training and testing subsets from a user-item matrix, while relatively straightforward in concept, is actually somewhat challenging to do programatically. The challenge results from the need to randomly select user/rating pairs from throughout the matrix. In other words, we are forced to randomly sample across two dimensions rather than simply select either certain rows or certain columns for a subset. This challenge was addressed by randomly sampling both row and column indices and storing the results within two separate vectors. The contents of those vectors are then used to select items from the data frame for use as a testing subset. A total of 15 items from the original data set are randomly set aside for use as a test data set.
+
+Additionally, a training subset is formulated by making a copy of the original data frame and then setting all elements of that matrix that correspond to the testing subset to 'NA'. Doing so enables the relatively straightforward calculation of the metrics we are asked to calculate for this assignment.
+
+The code block shown below implements these concepts while also tallying the number of non-NA items in each row and column; those tallies will be needed later for purposes of accurately calculating the user and item bias values.
+
+```{r}
+# --------------------------------------------------------------------------
+# Create training subset
+set.seed(123)
+
+# get row + col ID's of items to be set aside for test set
+trows <- sample(nrow(jester), 15)
+tcols <- sample((1:ncol(jester)), 15, replace = TRUE)
+
+# make a copy of original data to be used as training subset
+training_matrix <- jester
+
+# remove test set items from training set by setting them to 'NA'
+for (i in 1:length(trows)) {
+    if (!is.na(training_matrix[trows[i], tcols[i] ] )) {
+        training_matrix[trows[i], tcols[i]] <- NA
+    } # end if
+} # end for i
+
+# count number of non-NA's in each row of training set
+trainrow_valid <- rowSums(!is.na(training_matrix[,]))
+
+# set zeroes to very small values to prevent div by zero
+for (i in 1:nrow(training_matrix)) {
+  if (trainrow_valid[i] == 0) trainrow_valid[i] <- 0.0001  
+}
+
+# count number of non-NA's in each column of training set
+traincol_valid <- colSums(!is.na(training_matrix[,]))
+
+# set zeroes to very small values to prevent div by zero
+for (i in 1:ncol(training_matrix)) {
+  if (traincol_valid[i] == 0) traincol_valid[i] <- 0.0001  
+}
+
+```
+
+_____
+
+### Calculating the Raw Average (Mean) Rating for the Training Set
+
+With the training set properly defined we can now calculate the raw mean rating for every user-item combination within the training data set. We can take advantage of R's ability to exclude NA values to simplify this calculation: The __rowMeans__ function allows us to average only the non-NA values that are found within the training data matrix:
+
+```{r}
+# --------------------------------------------------------------------------
+# calculate the raw average (mean) rating for every user-item combination for TRAINING data set
+raw_mean <- sum(rowMeans(training_matrix[,], na.rm = TRUE) ) / nrow(training_matrix)
+raw_mean
+```
+
+As shown above, the raw mean for the training data is __-1.739083__. Since the valid range for ratings is [-10, 10], this indicates that, on average, a user will assess a somewhat negative rating on any joke contained within the data set.
+
+_____
+
+### Calculating the RMSE's for the Raw Mean
+
+The RMSE for both the test data and training data are calculated below.
+
+```{r}
+# ---------------------------------------------------
+# Calc RMSE for test set 
+
+test_errs <- data.frame(SE = numeric(0), stringsAsFactors = FALSE)
+
+for (i in 1:length(trows)) {
+    # if test set element is not null, we need to calc error; if is null, error is zero fpr 
+    # that element
+    if (!is.na(jester[trows[i], tcols[i]] )) {
+      # calculate error for element of test set and square it
+      sq_err <- (jester[trows[i], tcols[i]] - raw_mean)^2
+      
+      # add item to data frame
+      test_errs <- rbind(test_errs, data.frame(SE = sq_err) )
+    } # end if
+} # end for i
+
+# now calc RMSE for test set using test_err tally
+
+RMSE_eval <- sqrt(mean(test_errs$SE))
+RMSE_eval
+
+# -------------------------------------------------------------------------------------
+# calc RMSE for training set: iterate over entire matrix
+
+train_errs <- data.frame(SE = numeric(0), stringsAsFactors = FALSE)
+
+for (i in 1:nrow(training_matrix)) {
+  for (j in 1:ncol(training_matrix)) {
+    # if test set element is not null, we need to calc error; if is null, error is zero fpr 
+    # that element
+    
+    if (!is.na(training_matrix[i,j])) {
+      # calculate error for element of test set and square it
+      sq_err <- (training_matrix[i,j] - raw_mean)^2
+      
+      # add item to data frame
+      train_errs <- rbind(train_errs, data.frame(SE = sq_err) )
+    } # end if
+    
+  } # end for j
+} # end for i
+
+RMSE_train <- sqrt(mean(train_errs$SE))
+RMSE_train
+
+```
+
+The RMSE for the test data is __5.525018__ while the RMSE for training data is __5.341957__.
+
+_____
+
+### Using the Training Data, Calculate the Bias for each User and Item
+
+We again make use of R's ability to exclude NA values in calculating the required user and item biases:
+
+```{r}
+# --------------------------------------------------------------------------
+# Using your training data, calculate the bias for each user and each item.
+
+# exclude all NA's from bias calculations: since training_matrix has all test set
+# elements already set to NA, we can use rowMeans, colMeans to calc biases
+
+t_user_biases <- rowMeans(training_matrix[,] - raw_mean, na.rm = TRUE) / 
+                 trainrow_valid
+t_user_biases
+
+# get biases for each item
+t_item_biases <- colMeans(training_matrix[,] - raw_mean, na.rm = TRUE) / traincol_valid
+
+t_item_biases
+```
+
+_____
+
+### Calculating Baseline Predictors
+
+Using the raw mean and appropriate user and item Biases, we now calculate the baseline predictors for every user-item combination. While calculating the predictors, we check to ensure that no predictor falls outside of the [-10, 10] range to which valid ratings are limited.
+
+```{r}
+
+# --------------------------------------------------------------------------
+# From the raw average, and the appropriate user and item biases, calculate the baseline predictors for every user-item combination.
+
+baseline <- matrix(nrow = nrow(jester), ncol = ncol(jester) )
+
+for (i in 1:nrow(jester)) {
+  for (j in 1:ncol(jester)) {
+    baseline[i,j] <- raw_mean + t_user_biases[i] + t_item_biases[j]
+    if (baseline[i,j] > 10) baseline[i,j] <- 10
+    if (baseline[i,j] < -10) baseline[i,j] <- -10
+  }
+}
+
+head (round(baseline, 2))
+```
+
+_____
+
+### Calculating RMSE's for the Baseline Predictors
+
+We now calculate the RMSE for the baseline predictors for both the training and test data.
+
+```{r}
+# --------------------------------------------------------------------------
+# Calculate the RMSE for the baseline predictors for test data
+
+test2_errs <- data.frame(SE = numeric(0), stringsAsFactors = FALSE)
+
+for (i in 1:length(trows)) {
+    # if test set element is not null, we need to calc error; if is null, error is zero fpr 
+    # that element
+    
+    if (!is.na(jester[trows[i], tcols[i]] )) {
+      # calculate error for element of test set and square it
+      sq_err <- (jester[trows[i], tcols[i]] - baseline[trows[i], tcols[i]])^2
+      
+      # add item to data frame
+      test2_errs <- rbind(test2_errs, data.frame(SE = sq_err) )
+    } # end if
+} # end for i
+
+# now calc RMSE for test set using test_err tally
+
+RMSE_eval2 <- sqrt(mean(test2_errs$SE))
+RMSE_eval2
+
+
+# -------------------------------------------------------------------------------------
+# calc RMSE for training set relative to baseline predictor: iterate over entire matrix
+
+train2_errs <- data.frame(SE = numeric(0), stringsAsFactors = FALSE)
+
+for (i in 1:nrow(training_matrix)) {
+  for (j in 1:ncol(training_matrix)) {
+    # if test set element is not null, we need to calc error; if is null, error is zero fpr 
+    # that element
+    
+    if (!is.na(training_matrix[i,j])) {
+      # calculate error for element of test set and square it
+      sq_err <- (training_matrix[i,j] - baseline[i,j])^2
+      
+      # add item to data frame
+      train2_errs <- rbind(train2_errs, data.frame(SE = sq_err) )
+    } # end if
+    
+  } # end for j
+} # end for i
+
+RMSE_train2 <- sqrt(mean(train2_errs$SE))
+RMSE_train2
+```
+
+As we can see, the RMSE for the test data is __5.343222__ while the RMSE for the training data is __5.049608__.
+
+_____
+
+### Summary of Results
+
+The RMSE scores derived herein are summarized in the table shown below. As we can see in the table, the RMSE improved slightly when the baseline predictor was used relative to the RMSE's obtained when the raw mean was used as the predictor.
+
+| Predictor | Training | Testing  |
+| --------- | -------- | ---------|
+| Raw Mean  | 5.341957 | 5.525018 |
+| Baseline  | 5.049608 | 5.343222 |
+
+We calculate the percentage improvement for each as follows:
+
+```{r}
+testing_imp <- round((1 - RMSE_eval2/RMSE_eval) * 100, 2)
+testing_imp
+
+training_imp <- round((1 - RMSE_train2/RMSE_train) * 100, 2)
+training_imp
+```
+
+The baseline predictor improved on the accuracy of the raw mean predictor by __3.29%__ when applied to the testing data and by __5.47%__ when applied to the training data. This shows that, in this instance, use of a baseline predictor should be preferred over use of the raw mean as a predictor.
