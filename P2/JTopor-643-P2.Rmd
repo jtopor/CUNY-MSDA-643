@@ -1,0 +1,590 @@
+---
+title: "User-Based and Item-Based Collaborative Filtering "
+author: 'Author: James Topor'
+date: "June 11, 2017"
+output:
+  html_document:
+    highlight: tango
+    theme: cerulean
+    toc: yes
+    toc_depth: 2
+    toc_float:
+      collapsed: yes
+      number_sections: yes
+      smooth_scroll: no
+  pdf_document:
+    toc: yes
+    toc_depth: '2'
+---
+
+# Introduction
+
+The purpose of this project is to implement multiple recommendation algorithms for an existing dataset of user-item ratings.
+
+The data set to be used is a subset of the __Jester__ Online Joke Recommender System. Specifically, a subset containing data from 24,938 users who have rated between 15 and 35 out of 100 possible jokes was downloaded from the following website:
+
+- http://www.ieor.berkeley.edu/~goldberg/jester-data/
+
+From that site a file named __jester-data-3.zip__ containing a compressed Excel file was downloaded and decompressed. Excel was then used to convert the resulting EXcel file to CSV format.
+
+_____
+
+# Data Exploration
+
+We'll get started by loading the CSV file and checking the dimensionality of the resulting data frame.
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+library(recommenderlab)
+library(knitr)
+set.seed(1)
+```
+
+```{r}
+# load CSV version of jester subset
+jester <- read.csv("c:/data/643/jester-data-3.csv", header = FALSE)
+
+dim(jester)
+```
+
+The resulting data frame is comprised of 24,938 rows, each corresponding to a specific user, and 101 columns. Of the 101 columns, the data set's web site tells us that the first column contains a count of the number of jokes a user has rated while the remaining 100 columns contain the ratings that users have assessed for the 100 jokes that comprise the Jester data set. Therefore, if we exclude the first column, the contents of the data frame comprise a user-item matrix containing a total of __24938 * 100 = 2,493,800__ possible ratings. Since a matrix of such magnitude is likely to prove to be too large relative to the available computing resources, we will randomly select the records of 10,000 users for our usage:
+
+```{r}
+trows <- sample(nrow(jester), 10000)
+jester <- jester[trows,]
+
+# memory cleanup
+rm(trows)
+```
+
+Reducing the data set in this manner leaves us with __10000 * 100 = 1,000,000__ possible ratings. However, the resulting data structure exceeds 3.5 MB in size, thereby rendering it too large for an effective upload to Github. As such, anyone wishing to reproduce these results must follow the __Jester__ data set download and conversion procedures outlined above within their own local computing environment.
+
+The ratings themselves fall within the range of __[-10, 10]__, with -10 being the lowest possible rating and 10 being the highest. We are also told on the data set's web site that any items not rated by a user have been filled in with a value of '99'.
+
+We can make use of the content of the first column to get a sense of the density of the user-item matrix:
+
+```{r}
+summary(jester$V1)
+```
+
+As we can see, each user has on average rated approximately 24 out of the 100 total jokes, with the minimums and maximums conforming to the (15 - 35) range indicated on the data set's website. Given that the mean number of items rated is __24.71__, the overall density of the user-item matrix is __24.71%__. As such, of the 1,000,000 total possible ratings within the data set, we should expect only __.2471 * 1,000,000 = 247,100__ (approximately) to actually contain valid rating values within the range of [-10, 10].
+
+The first column of the data frame is now removed since it does not contain user ratings. Furthermore, each '99' value within the data frame is set to a value of 'NA' to properly reflect the fact that all '99' values represent a lack of data.
+
+```{r}
+# remove first column since it does not contain user ratings
+jester <- jester[,2:ncol(jester)]
+
+# set all 99's to NA
+jester[,][jester[,] == 99] <- NA
+```
+
+Checking the minimum and maximum ratings when 'NA' values are excluded indicates that the ratings do, in fact, fall within the specified [-10, 10] range:
+
+```{r}
+min(jester[][], na.rm = TRUE)
+max(jester[][], na.rm = TRUE)
+```
+
+A histogram of the raw rating values shows a somewhat normal distribution, with positive ratings appearing to outnumber negative ratings:
+
+```{r}
+hist(as.vector(as.matrix(jester)), main = "Distribution of Jester Ratings",
+     col = "yellow", xlab = "Ratings")
+```
+
+A boxplot of the raw ratings confirms the near normality of the distribution:
+
+```{r}
+boxplot(as.vector(as.matrix(jester)), col = "yellow", main = "Distribution of Jester Ratings", ylab = "Ratings")
+```
+
+Summary statistics for the raw rating values show that the average rating across all items and users is __0.30__, while the median rating value is __0.80__, thereby confirming the impression of positive skew conveyed by the histogram shown above:
+
+```{r}
+summary(as.vector(as.matrix(jester)))
+```
+
+While the mean is lower than the median, plotting the average rating per user shows that those values do appear to be approximately normally distributed, though not exactly zero-centered:
+
+```{r}
+average_ratings_per_user <- rowMeans(jester, na.rm = TRUE)
+
+hist(average_ratings_per_user, main = "Distribution of the average rating per user",
+     col = "yellow")
+
+# memory cleanup
+rm(average_ratings_per_user)
+```
+
+As such, the data set may benefit from normalization during model building. Therefore, we will make use of the __recommenderlab__ package's built-in centering and Z-score normalization capabilities as we construct the required models.
+
+_____
+
+# Creating Training and Testing Subsets
+
+Prior to using any of the pre-built __recommenderlab__ functions for collaborative filtering we must first convert the data frame to a __realRatingMatrix__. This is done by first converting the data frame to an __R__ matrix, then converting that matrix to a __realRatingMatrix__ using the __as()__ function.
+
+```{r}
+# convert the jester data frame to a matrix
+rmat <- as.matrix(jester)
+
+# convert matrix to a recommenderlab realRatingMatrix
+rmat <- as(rmat,"realRatingMatrix")
+```
+
+With the realRatingMatrix in place, we can now split the data into dedicated training and testing subsets using an approach described on page 25 of the CRAN vignette for the __recommenderlab__ package, which can be found at the following web link:
+
+- https://cran.r-project.org/web/packages/recommenderlab/vignettes/recommenderlab.pdf
+
+The __evaluationScheme()__ function will split the data set into training and testing subsets according to a variety of user-specified parameters. In the R code snippet shown below, the realRatingMatrix is split according to an 80/20 training/testing split, with up to 15 items recommended for each user. Furthermore, we specify that any rating greater than zero is considered a positive rating, in conformance with the predefined [-10, 10] rating scale.
+
+```{r}
+# split the data into the training and the test set:
+e <- evaluationScheme(rmat, method="split", train=0.8, given=15, goodRating=0)
+```
+
+The output of the __evaluationScheme()__ function is a single R object containing both the training and testing subsets. That object will be used below to define and evaluate a variety of recommender models.
+
+_____
+
+# The Recommendation Algorithms
+
+The recommender algorithms to be applied to the data set are as follows:
+
+- User-based Collaborative Filtering;
+
+- Item-based Collaborative Filtering;
+
+Each algorithm will be tested on the raw non-normalized data, as well as with center normalized and Z-score normalized versions of the data set. This will allow us to examine whether any performance improvement can be attained by applying normalization techniques to the data. Similarly, models will be constructed using cosine similarity, Euclidean distance, and Pearson correlation measures to allow us to discern which of those three similarity metrics performs best relative to our data set. Finally, each of the recommendation algorithms can be compared against one another to determine which performs best at predicting user ratings for the subset of the __Jester__ data set used here.
+
+Throughout the R code and associated summary tables, recommender models will be identified according to the following naming construct:
+
+- __MMMM_X_D__
+
+with the subcomponents defined as follows:
+
+- __'MMMM'__ can be either "UBCF" in the case of a user-based collaborative filter or "IBCF" in the case of a item-based collaborative filter.
+
+- __'X'__ will be a single letter indicative of the type of normalization used within the model. Valid values will be __N__ for no normalization (i.e., the raw data is used), __Z__ for Z-score normalization, and __C__ for centering-based normalization.
+
+- __'D'__ will be a single letter indicative of the type of similarity metric used within the model. Valid values will be __C__ for cosine similarity, __E__ for Euclidean Distance, and __P__ for Pearson's Correlation.
+
+Therefore, a total of __2 x 3 x 3 = 18__ models will be constructed and evaluated against one another.
+
+_____
+
+#### User-Based Collaborative Filtering: Cosine Similarity
+
+We'll start by defining three separate user-based collaborative filter models using cosine similarity and varying approaches to normalization of the data. The models will be identified as follows:
+
+- __UBCF_N_C__ : The raw data is used with no normalization applied;
+
+- __UBCF_C_C__: Data are normalized using centering.
+
+- __UBCF_Z_C__: Z-score normalization is applied to the data;
+
+(*NOTE: The models names are explicitly provided in this instance to reinforce the fact that the naming construct described earlier is being adhered to throughout this document. Subsequent model discussions will not include this explicit form of model name explanation*.)
+
+The models are defined as follows:
+
+```{r}
+#train UBCF cosine similarity models
+
+# non-normalized
+UBCF_N_C <- Recommender(getData(e, "train"), "UBCF", 
+      param=list(normalize = NULL, method="Cosine"))
+
+# centered
+UBCF_C_C <- Recommender(getData(e, "train"), "UBCF", 
+      param=list(normalize = "center",method="Cosine"))
+
+# Z-score normalization
+UBCF_Z_C <- Recommender(getData(e, "train"), "UBCF", 
+      param=list(normalize = "Z-score",method="Cosine"))
+```
+
+To evaluate the models we again make use of an approach suggested in the CRAN vignette for the __recommenderlab__ package: 
+
+- We first use the __predict()__ function to generate predictions for the known portion of the test data;
+
+- Then, the __calcPredictAccuracy()__ function to calculate the error between the predictions and the unknown portions of the test data.
+
+```{r}
+# compute predicted ratings
+p1 <- predict(UBCF_N_C, getData(e, "known"), type="ratings")
+
+p2 <- predict(UBCF_C_C, getData(e, "known"), type="ratings")
+
+p3 <- predict(UBCF_Z_C, getData(e, "known"), type="ratings")
+
+# set all predictions that fall outside the valid range to the boundary values
+p1@data@x[p1@data@x[] < -10] <- -10
+p1@data@x[p1@data@x[] > 10] <- 10
+
+p2@data@x[p2@data@x[] < -10] <- -10
+p2@data@x[p2@data@x[] > 10] <- 10
+
+p3@data@x[p3@data@x[] < -10] <- -10
+p3@data@x[p3@data@x[] > 10] <- 10
+
+# aggregate the performance statistics
+error_UCOS <- rbind(
+  UBCF_N_C = calcPredictionAccuracy(p1, getData(e, "unknown")),
+  UBCF_C_C = calcPredictionAccuracy(p2, getData(e, "unknown")),
+  UBCF_Z_C = calcPredictionAccuracy(p3, getData(e, "unknown"))
+)
+kable(error_UCOS)
+
+# memory cleanup
+rm(UBCF_N_C, UBCF_C_C, UBCF_Z_C)
+```
+
+The table above shows the root mean square error (RMSE), mean squared error (MSE), and mean absolute error (MAE) for each of the three UBCF models we constructed using cosine similarity with varying approaches to data normalization. As we can see, Z-score normalization outperformed centering-based normalization, and both of those normalization approaches outperformed a model constructed using non-normalized data. 
+
+A boxplot and histogram of the Z-score model's predicted values demonstrates that their distribution is nearly normal:
+
+```{r}
+boxplot(as.vector(as(p3, "matrix")), col = "yellow", main = "Distribution of Predicted Values for UBCF Z-Score/Cosine Model", ylab = "Ratings")
+
+hist(as.vector(as(p3, "matrix")), main = "Distrib. of Predicted Values for UBCF Z-Score/Cosine Model", col = "yellow", xlab = "Predicted Ratings")
+```
+
+A direct comparison of the summary statistics for the raw data and the predictions obtained from the __UBCF_Z_C__ model shows that the predicted values appear to fall within a narrower 1st to 3rd quartile range than do the raw ratings. Furthermore, we can see that predictions have been made for each of the 752,894 missing values within the original data set as evidenced by the lack of NA values in the prediction results.
+
+```{r}
+summary(as.vector(as.matrix(jester)))
+summary(as.vector(p3@data@x))
+```
+
+_____
+
+#### User-Based Collaborative Filtering: Euclidean Distance
+
+Used-based collaborative filtering models employing Euclidean Distance as the similarity metric are generated following the approach outlined above for the cosine similarity models:
+
+```{r}
+#train UBCF Euclidean Distance models
+
+# non-normalized
+UBCF_N_E <- Recommender(getData(e, "train"), "UBCF", 
+      param=list(normalize = NULL, method="Euclidean"))
+
+# centered
+UBCF_C_E <- Recommender(getData(e, "train"), "UBCF", 
+      param=list(normalize = "center",method="Euclidean"))
+
+# Z-score normalization
+UBCF_Z_E <- Recommender(getData(e, "train"), "UBCF", 
+      param=list(normalize = "Z-score",method="Euclidean"))
+```
+
+Evaluation of the models is performed as follows:
+
+```{r}
+# compute predicted ratings
+p1 <- predict(UBCF_N_E, getData(e, "known"), type="ratings")
+
+p2 <- predict(UBCF_C_E, getData(e, "known"), type="ratings")
+
+p3 <- predict(UBCF_Z_E, getData(e, "known"), type="ratings")
+
+# set all predictions that fall outside the valid range to the boundary values
+p1@data@x[p1@data@x[] < -10] <- -10
+p1@data@x[p1@data@x[] > 10] <- 10
+
+p2@data@x[p2@data@x[] < -10] <- -10
+p2@data@x[p2@data@x[] > 10] <- 10
+
+p3@data@x[p3@data@x[] < -10] <- -10
+p3@data@x[p3@data@x[] > 10] <- 10
+
+# aggregate the performance statistics
+error_UEUC <- rbind(
+  UBCF_N_E = calcPredictionAccuracy(p1, getData(e, "unknown")),
+  UBCF_C_E = calcPredictionAccuracy(p2, getData(e, "unknown")),
+  UBCF_Z_E = calcPredictionAccuracy(p3, getData(e, "unknown"))
+)
+kable(error_UEUC)
+
+# memory cleanup
+rm(UBCF_N_E, UBCF_C_E, UBCF_Z_E)
+```
+
+As shown above, Z-score normalization once again outperformed centering-based normalization, and both of those normalization approaches outperformed a model constructed using non-normalized data. Furthermore, these models appear to outperform their cosine similarity-based counterparts, thereby indicating that Euclidean Distance should be preferred over cosine similarity when developing a user-based collaborative filtering recommender for our data set.
+
+_____
+
+#### User-Based Collaborative Filtering: Pearson Correlation
+
+Used-based collaborative filtering models employing Pearson Correlation as the similarity metric are generated following the approach outlined above for our previous models:
+
+```{r}
+#train UBCF pearson correlation models
+
+# non-normalized
+UBCF_N_P <- Recommender(getData(e, "train"), "UBCF", 
+      param=list(normalize = NULL, method="pearson"))
+
+# centered
+UBCF_C_P <- Recommender(getData(e, "train"), "UBCF", 
+      param=list(normalize = "center",method="pearson"))
+
+# Z-score normalization
+UBCF_Z_P <- Recommender(getData(e, "train"), "UBCF", 
+      param=list(normalize = "Z-score",method="pearson"))
+```
+
+Evaluation of the models is performed as follows:
+
+```{r}
+# compute predicted ratings
+p1 <- predict(UBCF_N_P, getData(e, "known"), type="ratings")
+
+p2 <- predict(UBCF_C_P, getData(e, "known"), type="ratings")
+
+p3 <- predict(UBCF_Z_P, getData(e, "known"), type="ratings")
+
+# set all predictions that fall outside the valid range to the boundary values
+p1@data@x[p1@data@x[] < -10] <- -10
+p1@data@x[p1@data@x[] > 10] <- 10
+
+p2@data@x[p2@data@x[] < -10] <- -10
+p2@data@x[p2@data@x[] > 10] <- 10
+
+p3@data@x[p3@data@x[] < -10] <- -10
+p3@data@x[p3@data@x[] > 10] <- 10
+
+# aggregate the performance statistics
+error_UPC <- rbind(
+  UBCF_N_P = calcPredictionAccuracy(p1, getData(e, "unknown")),
+  UBCF_C_P = calcPredictionAccuracy(p2, getData(e, "unknown")),
+  UBCF_Z_P = calcPredictionAccuracy(p3, getData(e, "unknown"))
+)
+kable(error_UPC)
+
+# memory cleanup
+rm(UBCF_N_P, UBCF_C_P, UBCF_Z_P)
+```
+
+As shown above, Z-score normalization once again outperformed centering-based normalization, and both of those normalization approaches outperformed a model constructed using non-normalized data. However, these models do not outperform the Euclidean Distance-based models, and their performance relative to the cosine similarity-based models appears mixed. 
+
+As such, the Euclidean Distance should be preferred over cosine similarity when developing a user-based collaborative filtering recommender for our data set.
+
+_____
+
+#### Item-Based Collaborative Filtering: Cosine Similarity
+
+Specification of our item-based collaborative filtering recommenders will follow the approach used above for the user-based recommenders.  We'll start by defining three separate item-based collaborative filter models using cosine similarity and varying approaches to normalization of the data. The three approaches to normalization will be referred to as follows:
+
+- __IBCF_N_C__ : The raw data is used with no normalization applied;
+
+- __IBCF_C_C__: Data are normalized using centering;
+
+- __IBCF_Z_C__: Z-score normalization is applied to the data.
+
+The models are defined as follows:
+
+```{r}
+#train IBCF cosine similarity models
+
+# non-normalized
+IBCF_N_C <- Recommender(getData(e, "train"), "IBCF", 
+      param=list(normalize = NULL, method="Cosine"))
+
+# centered
+IBCF_C_C <- Recommender(getData(e, "train"), "IBCF", 
+      param=list(normalize = "center",method="Cosine"))
+
+# Z-score normalization
+IBCF_Z_C <- Recommender(getData(e, "train"), "IBCF", 
+      param=list(normalize = "Z-score",method="Cosine"))
+```
+
+Evaluation of the models is performed as follows:
+
+```{r}
+# compute predicted ratings
+p1 <- predict(IBCF_N_C, getData(e, "known"), type="ratings")
+
+p2 <- predict(IBCF_C_C, getData(e, "known"), type="ratings")
+
+p3 <- predict(IBCF_Z_C, getData(e, "known"), type="ratings")
+
+# set all predictions that fall outside the valid range to the boundary values
+p1@data@x[p1@data@x[] < -10] <- -10
+p1@data@x[p1@data@x[] > 10] <- 10
+
+p2@data@x[p2@data@x[] < -10] <- -10
+p2@data@x[p2@data@x[] > 10] <- 10
+
+p3@data@x[p3@data@x[] < -10] <- -10
+p3@data@x[p3@data@x[] > 10] <- 10
+
+# aggregate the performance statistics
+error_ICOS <- rbind(
+  IBCF_N_C = calcPredictionAccuracy(p1, getData(e, "unknown")),
+  IBCF_C_C = calcPredictionAccuracy(p2, getData(e, "unknown")),
+  IBCF_Z_C = calcPredictionAccuracy(p3, getData(e, "unknown"))
+)
+
+kable(error_ICOS)
+
+# memory cleanup
+rm(IBCF_N_C, IBCF_C_C, IBCF_Z_C)
+```
+
+As we can see, neither Z-score normalization nor centering of the data improved upon the accuracy obtained when simply using the raw non-normalized data.
+
+A boxplot and histogram of the predictions obtained from the non-normalized model shows a near-normal distribution that is very similar to that of the UBCF Z-Score/Cosine model plotted above:
+
+```{r}
+boxplot(as.vector(as(p1, "matrix")), col = "yellow", main = "Distribution of Predicted Values for IBCF Raw/Cosine Model", ylab = "Ratings")
+
+hist(as.vector(as(p1, "matrix")), main = "Distrib. of Predicted Values for IBCF Raw/Cosine Model", col = "yellow", xlab = "Predicted Ratings")
+```
+
+A direct comparison of the summary statistics for the raw data and the predictions obtained from the __IBCF_N_C__ model shows that the predicted values appear to fall within a narrower 1st to 3rd quartile range than do the raw ratings. Furthermore, we can see that predictions have been made for each of the 752,894 missing values within the original data set as evidenced by the lack of NA values in the prediction results.
+
+```{r}
+summary(as.vector(as.matrix(jester)))
+summary(as.vector(p1@data@x))
+```
+
+_____
+
+#### Item-Based Collaborative Filtering: Euclidean Distance
+
+Item-based collaborative filtering models using Euclidean Distance as the similarity metric are generated following the approach outlined above for the cosine similarity models:
+
+```{r}
+#train IBCF Euclidean Distance models
+
+# non-normalized
+IBCF_N_E <- Recommender(getData(e, "train"), "IBCF", 
+      param=list(normalize = NULL, method="Euclidean"))
+
+# centered
+IBCF_C_E <- Recommender(getData(e, "train"), "IBCF", 
+      param=list(normalize = "center",method="Euclidean"))
+
+# Z-score normalization
+IBCF_Z_E <- Recommender(getData(e, "train"), "IBCF", 
+      param=list(normalize = "Z-score",method="Euclidean"))
+```
+
+Evaluation of the models is performed as follows:
+
+```{r}
+# compute predicted ratings
+p1 <- predict(IBCF_N_E, getData(e, "known"), type="ratings")
+
+p2 <- predict(IBCF_C_E, getData(e, "known"), type="ratings")
+
+p3 <- predict(IBCF_Z_E, getData(e, "known"), type="ratings")
+
+# set all predictions that fall outside the valid range to the boundary values
+p1@data@x[p1@data@x[] < -10] <- -10
+p1@data@x[p1@data@x[] > 10] <- 10
+
+p2@data@x[p2@data@x[] < -10] <- -10
+p2@data@x[p2@data@x[] > 10] <- 10
+
+p3@data@x[p3@data@x[] < -10] <- -10
+p3@data@x[p3@data@x[] > 10] <- 10
+
+# aggregate the performance statistics
+error_IEUC <- rbind(
+  IBCF_N_E = calcPredictionAccuracy(p1, getData(e, "unknown")),
+  IBCF_C_E = calcPredictionAccuracy(p2, getData(e, "unknown")),
+  IBCF_Z_E = calcPredictionAccuracy(p3, getData(e, "unknown"))
+)
+kable(error_IEUC)
+
+# memory cleanup
+rm(IBCF_N_E, IBCF_C_E, IBCF_Z_E)
+```
+
+As shown above, centering-based normalization outperformed Z-Score normalization and yielded hardly any improvement over simply using the raw non-normalized data. However, none of the Euclidean Distance-based models outperform the model obtained using cosine similarity and the raw non-normalized data as the basis for an item-based collaborative filtering recommender.
+
+_____
+
+#### Item-Based Collaborative Filtering: Pearson Correlation
+
+Item-based collaborative filtering models using Pearson Correlation as the similarity metric are generated following the approach outlined above for our previous models:
+
+```{r}
+#train IBCF pearson correlation models
+
+# non-normalized
+IBCF_N_P <- Recommender(getData(e, "train"), "IBCF", 
+      param=list(normalize = NULL, method="pearson"))
+
+# centered
+IBCF_C_P <- Recommender(getData(e, "train"), "IBCF", 
+      param=list(normalize = "center",method="pearson"))
+
+# Z-score normalization
+IBCF_Z_P <- Recommender(getData(e, "train"), "IBCF", 
+      param=list(normalize = "Z-score",method="pearson"))
+```
+
+Evaluation of the models is performed as follows:
+
+```{r}
+# compute predicted ratings
+p1 <- predict(IBCF_N_P, getData(e, "known"), type="ratings")
+
+p2 <- predict(IBCF_C_P, getData(e, "known"), type="ratings")
+
+p3 <- predict(IBCF_Z_P, getData(e, "known"), type="ratings")
+
+# set all predictions that fall outside the valid range to the boundary values
+p1@data@x[p1@data@x[] < -10] <- -10
+p1@data@x[p1@data@x[] > 10] <- 10
+
+p2@data@x[p2@data@x[] < -10] <- -10
+p2@data@x[p2@data@x[] > 10] <- 10
+
+p3@data@x[p3@data@x[] < -10] <- -10
+p3@data@x[p3@data@x[] > 10] <- 10
+
+# aggregate the performance statistics
+error_IPC <- rbind(
+  IBCF_N_P = calcPredictionAccuracy(p1, getData(e, "unknown")),
+  IBCF_C_P = calcPredictionAccuracy(p2, getData(e, "unknown")),
+  IBCF_Z_P = calcPredictionAccuracy(p3, getData(e, "unknown"))
+)
+kable(error_IPC)
+
+# memory cleanup
+rm(IBCF_N_P, IBCF_C_P, IBCF_Z_P)
+```
+
+As shown above, centering outperformed Z-score normalization, and both of those normalization approaches outperformed a model constructed using non-normalized data. However, none of these models outperform the cosine similarity-based model that was applied to the raw non-normalized data.
+
+As such, cosine similarity should be preferred over both Euclidean Distance and Pearson Correlation metrics when developing a item-based collaborative filtering recommender for our data set, and no data normalization methods should be applied.
+
+# Conclusions
+
+The table and barplot below summarize the performance of each of the 18 models evaluated above, with the models sorted in ascending order according to their respective RMSE scores.
+
+```{r}
+c_res <- data.frame(rbind(error_UCOS, error_UEUC, error_UPC, error_ICOS, error_IEUC, error_IPC))
+
+c_res <- c_res[order(c_res$RMSE ),]
+
+kable(c_res)
+
+# las = 3: rotate x axis labels to perendicular; las = 1: rotate y axis labels
+barplot(c_res$RMSE, col = "yellow", main = "Barplot of Model RMSE's", las = 2, ylab = "RMSE", horiz = FALSE, names.arg = rownames(c_res), cex.names=.8)
+```
+
+These results reinforce what had been discussed earlier: 
+
+- An item-based collaborative filtering recommender using the raw, non-normalized data and using cosine similarity as the similarity metric performed best overall relative to all of the other 17 models. 
+
+- Of the user-based collaborative filtering models, using Z-score normalization and a Euclidean Distance similarity metric appears to have worked best.
+
+The fact that non-normalized data resulted in the best performing IBCF model may be reflective of the fact that, as shown within the __Data Exploration__ section above, the raw data are very nearly normalized to begin with. In fact, the two IBCF models that made use of either centering or Z-score normalization and a cosine similarity metric performed worse than all of the other models.
+
+Conversely, normalization of the data appears to improve the UBCF models regardless of which similarity metric is employed. As the table shows, the three UBCF models employing the raw, non-normalized data were the poorest performing UBCF models assessed herein. Of the two normalization metrics utilized in the development of our UBCF models, Z-score normalization consistently yielded models that outperformed those developed using centering-based normalization.
