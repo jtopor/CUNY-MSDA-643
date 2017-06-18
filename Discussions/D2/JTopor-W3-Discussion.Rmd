@@ -1,0 +1,61 @@
+---
+title: "643 Discussion 2"
+author: "James Topor"
+date: "June 17, 2017"
+output: html_document
+---
+
+### Problem Statement
+
+*Watch the following talk and summarize what you found to be the most important or interesting points. The first half will cover some of the mathematical techniques covered in this unit's reading and the second half some of the data management challenges in an industrial-scale recommendation system.*
+
+__Music Recommendations at Scale with Spark__
+
+https://www.youtube.com/watch?v=3LBgiFch4_g
+
+_____
+
+This 2014 lecture was given by Christopher Johnson, an employee of __Spotify__. During the talk he discussed how __Spotify__ has attempted to use __Spark__ as the basis of an improved version of __Spotify's__ legacy __Hadoop__-based recommender system. He also described the various ways in which __Spotify__ uses implicit ratings to recommend music to its users, including:
+
+- Suggesting similar artists to those which a user has listened to;
+
+- Generating a "radio"-like stream of music based on a user's selection of an artist or song they'd like to listen to;
+
+- Allowing users to browse __Spotify__-specific profiles of musical artists, wherein users will find __Spotify's__ recommendations for other artists they believe to be similar to the artist in the selected profile.
+
+These methods are essentially a combination of __content-based filtering__ and __collaborative filtering__. For content-based filtering, __Spotify__ is leveraging content from music publications, new articles, blogs, as well as the actual audio content of songs. For collaborative filtering, they make use of __Spotify__ users' listening and browsing histories.
+
+The speaker then proceeds to describe two primary approaches to matrix factorization, each of which is summarized below.
+
+_____
+
+### Explicit Matrix Factorization
+
+Explicit matrix factorization requires that users explicitly rate a subset of items. The recommender then attempts to predict how a user will rate other items. This is done by using two lower dimensional matrices to approximate the original larger matrix, thereby (hopefully) avoiding the computational overhead associated with using the original matrix. The goal is to minimize the root mean squared error (RMSE) between the original matrix and the output of the two smaller / lower dimensional matrices that are used to generate the approximation. 
+
+__Spotify__ does not use explicit matrix factorization since it does not rely on user-provided song ratings. Instead, they make use of implicit matrix factorization.
+
+_____
+
+### Implicit Matrix Factorization
+
+__Spotify__ relies on a large binary matrix wherein they keep track of whether or not a user has streamed a particular song. That binary matrix is then scaled by a weighting factor that is indicative of how often a user has streamed a song they've listened to. Their methodology attempts to minimize the resulting weighted RMSE.
+
+The speaker explains how to implement such an approach via __Hadoop__ using Alternating Least Squares (ALS). What they basically are doing is subsetting their binary matrix on the basis of certain user/item combinations and then calculating the required matrix factorizations for each subset via ALS. This approach seems to lend itself well to parallelization / distributed computations, thereby reducing the overall time required for calculating the factorization of the entire matrix.
+
+_____
+
+### Computational Challenges & Possible Solutions
+
+However, minimizing the RMSE via ALS is an iterative process, thereby requiring repeated reads/writes of the matrices derived from the subsets to disk, and __Hadoop__ (at least circa 2014) provided no way to address this time consuming I/O bottleneck. __Spark__ apparently addresses this issue by allowing the user to cache the results of an iteration in memory instead of writing them to disk each time. Simply caching the results of each iteration via __Spark__ instead of writing them to disk as required by __Hadoop__ resulted in a 65% decrease in processing time when applied to a __Spotify__ data set comprised of 4 million users and 500,000 artists.
+
+To further reduce the required processing time, __Spotify__ explored various methods of partitioning the data for use within a distributed / parallel computing environment. The best performing method relied on the partitioning of data on the basis of entire user profiles instead of the user/item partitioning they originally attempted. Doing so allowed them to calculate optimal user vectors with a relatively minimal amount of disk I/O or interim transmittal of data between the various distributed computing components, and resulted in an 85% decrease in processing time relative to __Spotify's__ legacy __Hadoop__ configuration when applied to the 4 million user / 500,000 artist data set mentioned above.
+
+_____
+
+### The Bottom Line
+
+The primary message of the talk seems to be that the way in which you choose to partition a large matrix for purposes of factorization can have a significant impact on either whether or how well the factorization process will improve upon the computational efficiency of your recommender system. Therefore, the memory restrictions imposed by your computing environment are a major consideration when attempting to construct a recommender system.
+
+A secondary, more implicit message seems to be that relying on software built by a third party such as __Spark__ is no guarantee that you will be successful in your attempts at building a recommender system. The speaker described several challenges the team at __Spotify__ encountered when trying to use __Spark__, including problems with stack overflow errors and other software anomalies within __Spark__ that either forced __Spotify__ to write their own code to replace components of __Spark's__ supposed capabilities or prevented __Spotify__ from being able to make use of their full data set within the __Spark__ environment.
+
