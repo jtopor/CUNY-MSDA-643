@@ -31,7 +31,7 @@ _____
 
 ### "Fake" Reviews as a Source of Human Bias
 
-An obvious example of bias in ratings-based recommender systems is the widespread presence of "fake" reviews that can be found on web sites such as __Amazon__ and __Yelp__. In many instances, these non-authentic reviews are the result of people being paid to either boost or diminish the popularity of a reviewed item by the proprietors or competitors of the item in question. An article on __TheWireCutter.com__ (see http://thewirecutter.com/blog/lets-talk-about-amazon-reviews/) summarizes the compensated view process as follows:
+An obvious example of bias in ratings-based recommender systems is the widespread presence of "fake" reviews that can be found on web sites such as __Amazon__ and __Yelp__. In many instances, these non-authentic reviews are the result of people being paid to either boost or diminish the popularity of a reviewed item by the proprietors or competitors of the item in question. An article on __TheWireCutter.com__ (see http://thewirecutter.com/blog/lets-talk-about-amazon-reviews/) summarizes the compensated review process as follows:
 
 - *The compensated-review process is simple: Businesses paid to create dummy accounts purchase products from Amazon and write four- and five-star reviews. Buying the product makes it tougher for Amazon to police the reviews, because the reviews are in fact based on verified purchases. The dummy accounts buy and review all sorts of things, and some of the more savvy pay-for-review sites even have their faux reviewers pepper in a few negative reviews of products made and sold by brands that aren't clients to create a sense of "authenticity."*
 
