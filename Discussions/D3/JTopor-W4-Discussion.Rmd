@@ -21,7 +21,9 @@ Furthermore, biases may be implicit within the data used as the basis of a recom
 
 - Those who authored any content that may have been algorithmically parsed into various recommender system categorizations;
 
-- Those who designed the algorithms used to parse the authored content into various categorizations. 
+- Those who designed the algorithms used to parse the authored content into various categorizations.
+
+In other words, the content itself is the product of human thought, and humans are known to harbor many types of implicit and explicit biases.
 
 Similarly, recommender systems based on either explicit or implicit ratings will be influenced by the biases and/or usage histories of the users of such systems.
 
