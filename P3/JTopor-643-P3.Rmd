@@ -1,0 +1,448 @@
+---
+title: 'Matrix Factorization via Singular Value Decomposition'
+author: 'Author: James Topor'
+date: "June 18, 2017"
+output:
+  html_document:
+    highlight: tango
+    theme: cerulean
+    toc: yes
+    toc_depth: 2
+    toc_float:
+      collapsed: yes
+      number_sections: yes
+      smooth_scroll: no
+  pdf_document:
+    toc: yes
+    toc_depth: '2'
+---
+
+# Introduction
+
+The purpose of this project is to implement a singular value decomposition (SVD) matrix factorization method within the context of a recommender system.
+
+The data set to be used is a subset of the __Jester__ Online Joke Recommender System. Specifically, a subset containing data from 24,938 users who have rated between 15 and 35 out of 100 possible jokes was downloaded from the following website:
+
+- http://www.ieor.berkeley.edu/~goldberg/jester-data/
+
+From that site a file named __jester-data-3.zip__ containing a compressed Excel file was downloaded and decompressed. Excel was then used to convert the resulting EXcel file to CSV format.
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+library(recommenderlab)
+library(knitr)
+library(ggplot2)
+set.seed(1)
+```
+
+The data set is comprised of 24,938 rows, each corresponding to a specific user, and 101 columns. Of the 101 columns, the data set's web site tells us that the first column contains a count of the number of jokes a user has rated while the remaining 100 columns contain the ratings that users have assessed for the 100 jokes that comprise the Jester data set. Therefore, if we exclude the first column, the contents of the data frame comprise a user-item matrix containing a total of __24,938 * 100 = 2,493,800__ possible ratings. Since a matrix of such magnitude is likely to prove to be too large relative to the available computing resources, we will randomly select the records of 10,000 users for our usage. Furthermore, we will remove the first column of data since it does not represent actual user ratings, and we will replace all missing data indicators (the data set uses '99' to indicate missing data) with __NA__.
+
+```{r}
+# load CSV version of jester subset
+jester <- read.csv("c:/data/643/jester-data-3.csv", header = FALSE)
+
+# reduce matrix to 10,000 rows
+trows <- sample(nrow(jester), 10000)
+jester <- jester[trows,]
+
+# memory cleanup
+rm(trows)
+
+# remove first column since it does not contain user ratings
+jester <- jester[,2:ncol(jester)]
+
+# set all '99' values to NA since they represent missing data
+jester[,][jester[,] == 99] <- NA
+```
+
+_____
+
+# SVD and Dimensionality Reduction
+
+According to Chapter 11.3 of __"Mining of Massive Data Sets"__ (http://www.mmds.org/#ver21), an SVD is calculated for any given $M x N$ matrix by decomposing that matrix into three component matrices defined as follows:
+
+- __Matrix $U$__: An $M x r$ column orthonormal matrix where $r$ is the rank of the original matrix
+
+- __Matrix $\Sigma$__: An $r x r$ diagonal matrix containing the singular values of the original matrix
+
+- __Matrix $V$__: An $r x N$ column orthonormal matrix where $r$ is the rank of the original matrix.
+
+The original matrix can then be approximated by calculating the product of these matrices as follows:
+
+- __Approximation of original matrix__ = $U * \Sigma * V^T$
+
+If the rank $r$ of the matrix is substantially smaller than $N$, we can intuitively see that the combined sizes of the component matrices will be smaller than that of the original matrix, thereby providing a valuable reduction in dimensionality for computational purposes. However, if the rank $r$ is either equivalent to or not much smaller than than $N$, calculating an SVD alone probably won't provide any significant reduction in dimensionality relative to the original matrix and may, in fact, consume more memory than the original matrix itself. For example, if the original matrix is of full rank, matrix $U$ will necessarily be of size $M x N$ while matrix $\Sigma$ will be of size $N x N$ and matrix $V$ will be of size $N x N$. As such, we'd have taken an $M x N$ matrix and decomposed it into three other matrices that cumulatively increase our storage needs by $2 * N x N$ relative to the original matrix. 
+
+Such an outcome would be unwanted within the context of a recommender system since the SVD would simply be adding computational complexity and consuming more storage than would the original matrix. However, the singular values contained within matrix $\Sigma$ provide a means of escape from such an outcome. Specifically, we can identify the singular values that capture the largest amount of variability within the original matrix and retain only the columns of matrices $U$ and $V$ that correspond to those singular values.  Chapter 11.3 of __"Mining of Massive Data Sets"__ tells us that the singular values contained within our diagonal matrix $\Sigma$ will be ordered relative to the amount of variability they explain within the original matrix. Therefore, if we can identify a method of weighing the variability represented by each singular value, we may be able to successfully reduce the dimensionality of our data.
+
+Page 424 of __"Mining of Massive Data Sets"__  suggests we "__*..retain enough singular values to make up 90% of the energy..*__" within the original matrix. "__*..That is, the sum of the squares of the retained singular values should be at least 90% of the sum of the squares of all the singular values..*__". This is the approach we will make use of for purposes of reducing the dimensionality of the $U$, $\Sigma$, and $V$ matrices we derive from our data set.
+
+However, before proceeding further we must note that calculation of an SVD requires that there be no missing values within the matrix to be decomposed. Summary statistics for our data set indicate that we have more than 752,000 missing values therein:
+
+```{r}
+summary(as.vector(as.matrix(jester)))
+```
+
+As such, these missing values must be replaced with reasonable rating values before we attempt to calculate an SVD for our data set.
+
+_____
+
+# Dealing with Missing Data Values
+
+Our data set is comprised of ratings of up to 100 items provided by 10,000 total users, for a total of 1,000,000 possible ratings. However, as we have seen, more than 752,000 possible ratings are missing. How might we go about replacing those missing values so as to enable our SVD calculations?
+
+The summary statistics shown above indicate that the ratings are already very nearly zero-centered. A boxplot of the ratings confirms this:
+
+```{r}
+boxplot(as.vector(as.matrix(jester)), col = "yellow", main = "Distribution of Jester Ratings", ylab = "Ratings")
+```
+
+As such, simply replacing the missing values with the mean of the valid values might be a viable approach. However, doing so would necessarily skew the distribution away from its current distribution due to the inflated number of mean-equivalent values that would be added to the matrix. Furthermore, such an approach would fail to account for the inherent variability in the ratings that can be found across the user and item populations. 
+
+An alternative approach might entail using aspects of the way in which a baseline predictor is calculated. Specifically, we can compute user and item biases across the entire data set, and then replace any missing values with the sum of the raw mean and the relevant user and item biases. Such an approach would allow us to represent more of the actual variability found within the original data than would simply replacing the unknown values with the mean rating.
+
+This approach is implemented below:
+
+```{r}
+# get mean value for entire matrix
+raw_mean <- mean(as.vector(as.matrix(jester)), na.rm = TRUE )
+raw_mean
+
+# count number of non-NA's in each row of training set
+row_valid <- rowSums(!is.na(jester[,]))
+
+# count number of non-NA's in each column of training set
+col_valid <- colSums(!is.na(jester[,]))
+
+# calculate user biases
+user_biases <- rowMeans(jester[,] - raw_mean, na.rm = TRUE) / row_valid
+
+# calculate item biases
+item_biases <- colMeans(jester[,] - raw_mean, na.rm = TRUE) / col_valid
+
+# memory cleanup
+rm(row_valid, col_valid)
+
+# make a copy of the original matrix
+tjest <- jester
+
+for (i in 1:nrow(tjest)) {
+  for (j in 1:ncol(tjest)) {
+    
+    # if the matrix element has an NA, fill in with baseline predictor
+    if(is.na(tjest[i,j])) {
+          tjest[i,j] <- raw_mean + user_biases[i] + item_biases[j]
+          
+          # ensure new values are within valid ratings bounds
+          if (tjest[i,j] > 10) baseline[i,j] <- 10
+          if (tjest[i,j] < -10) baseline[i,j] <- -10
+    } # end if
+    
+  } # end for j
+} # end for i
+```
+
+A side-by-side comparison of the summary statistics for both the original data set and the imputed data shows that both the mean and the median have moved closer to zero as a result of the imputation of missing values:
+
+```{r}
+summary(as.vector(as.matrix(jester)))
+summary(as.vector(as.matrix(tjest)))
+```
+
+Additionally, the interquartile range has narrowed considerably. However, such an outcome is not unexpected due to the nature of the imputation process: Since the near-zero mean of the original data is a component of the equation used to derive each imputed value, we should intuitively expect most imputed values to be relatively close to zero, particularly if the average user and item biases are also near-zero values. Summary statistics for those values show that this is, in fact, the case:
+
+```{r}
+summary(user_biases)
+summary(item_biases)
+```
+
+A histogram of the imputed data set clearly shows that the majority of missing values have been filled with imputed values that are relatively close to zero:
+
+```{r}
+hist(as.vector(as.matrix(tjest)), col = "yellow", main = "Distribution of Imputed Ratings", xlab = "Ratings")
+```
+
+This demonstrates the impact of replacing missing ratings with imputed values for purposes of calculating the SVD: Once missing data values are filled with any value, the overall distribution of the data may change. Such changes can (and likely will) have an impact on the utility of any recommender system that is based upon such a matrix since any predicitions obtained from that recommender will have been partially derived from the imputed values. 
+
+_____
+
+# Calculating the SVD
+
+Prior to calculating the SVD we must convert the data frame containing the imputed data to a matrix. We can then identify the rank $r$ of that matrix and thereby quantify the sizings for the matrices $U$, $\Sigma$, and $V$:
+
+```{r}
+# convert data frame to matrix
+rmat3 <- as.matrix(tjest)
+
+# get the rank of the matrix: rank is 100
+qr(rmat3)$rank
+```
+
+The rank of the matrix is __100__, which is equivalent to the number of columns in the matrix. Given that the matrix itself is $M = 100,000$ x $N = 100$, the matrix is *full rank* and our SVD matrices will be sized as follows:
+
+- Matrix $U$ will be $M x N$
+
+- Matrix $\Sigma$ will be $N x N$
+
+- Matrix $V$ will be $N x N$
+
+This is the least favorable outcome possible since the results of our SVD calculations will __increase__ our storage requirements by the maximum possible amount, namely $2 * N x N$. Furthermore, no immediate reduction in dimensionality relative to the original matrix will be observed.
+
+The SVD is calculated using R's __svd()__ function:
+
+```{r}
+j_svd <- svd(rmat3)
+```
+
+A plot of the resulting singular values is shown below:
+
+```{r}
+# plot singular values
+plot(j_svd$d, pch=20, col = "blue", cex = 1.5, xlab='Singular Value', ylab='Magnitude', main = "Singular Values for User-Item Matrix")
+```
+
+The plot shows the descending order of the singular values quite clearly, with the magnitudes declining rapidly through the first 30 or so singular values before leveling out at a magnitude of somewhat less than 200. 
+
+_____
+
+# Dimensionality Reduction
+
+We can now attempt to reduce the dimensionality of the component SVD matrices using the sum of squares approach described earlier. Specifically, we will sum the squares of each singular value and then identify the first $k$ singular values contained within matrix $\Sigma$ whose squares equal or exceed 90% of the sums of the squares of all of the singular values.
+
+```{r}
+# calculate sum of squares of all singular values
+
+all_sing_sq <- sum(j_svd$d^2)
+```
+
+The plot of singular values shown above clearly shows that the first several singular values encapsulate a great deal of the variability of the values contained within the imputed ratings matrix. We can quantify the amount of variability for the first six, 12, and 20 singular values as follows:
+
+```{r}
+# calc variability described by first 6, 12, and 20 singular values
+first_six <- sum(j_svd$d[1:6]^2)
+
+first_six/all_sing_sq
+
+first_12 <- sum(j_svd$d[1:12]^2)
+
+first_12/all_sing_sq
+
+first_20 <- sum(j_svd$d[1:20]^2)
+
+first_20/all_sing_sq
+```
+
+First six singular values explain slightly more than half of the variability of the imputed ratings matrix, with the first dozen explaining nearly 64% and the first twenty explaining more than 75%. However, our goal is to identify the first $k$ singular values whose squares sum to at least 90% of the total of the sums of the squares of all of the singular values. A plot of a running sum of squares for the singular values shows that the 90% hurdle is achieved using somewhere between  42 and 46 singular values
+
+```{r}
+perc_vec <- NULL
+for (i in 1:length(j_svd$d)) {
+  perc_vec[i] <- sum(j_svd$d[1:i]^2) / all_sing_sq
+}
+
+plot(perc_vec, pch=20, col = "blue", cex = 1.5, xlab='Singular Value', ylab='% of Sum of Squares of Singular Values', main = "Choosing k for Dimensionality Reduction")
+lines(x = c(0,100), y = c(.90, .90))
+```
+
+To find the exact value of $k$, we can simply find the length of the vector that remains from our running sum of squares after excluding any items within that vector that exceed 0.90. This is done quite easily in R:
+
+```{r}
+length(perc_vec[perc_vec <= .90])
+```
+
+Setting $k = 43$ will retain 90% of variability within the imputed values matrix. As such, we truncate matrices $U$, $\Sigma$, and $V$ accordingly:
+
+```{r}
+k = length(perc_vec[perc_vec <= .90])
+
+s_k <- Diagonal(x = j_svd$d[1:k])
+dim(s_k)
+
+U_k <- j_svd$u[, 1:k]
+dim(U_k)
+
+# need to transpose the right singular values before truncating to k
+V_k <- t(j_svd$v)[1:k, ]
+dim(V_k)
+```
+
+As we can see above, we now have a matrix $\Sigma_k$ of size $43 x 43$, a matrix $U_k$ of size $10000 x 43$, and a matrix $V_k$ of size $43 x 100$. Therefore, the total number of numeric values required to house these component matrices is $(10000 * 43) + (43 * 43) + (43 * 100) = __436,149__. This represents an approximately __56.4%__ decrease in required storage relative to the original 1,000,000 item data set.
+
+_____
+
+# Approximating the Matrix of Imputed Values
+
+The three truncated matrices are then used to calculate a new prediction matrix which itself will be an *approximation* of the matrix containing the imputed values.
+
+```{r}
+predicted <- U_k %*% s_k %*% V_k
+
+# check dimensions to ensure they match original matrix
+dim(predicted)
+
+# convert to standard matrix format
+pred_mat <- as.matrix(predicted)
+
+# set colnames to match original matrix
+colnames(pred_mat) <- colnames(tjest)
+rownames(pred_mat) <- rownames(tjest)
+```
+
+As shown above, the resulting matrix is of size $10000 x 100$, identical in size to our original data set. A check of the minimum and maximum predicted ratings indicates that some predicted values fall outside of the valid [-10, 10] ratings range:
+
+```{r}
+# check the min and max vals for the new matrix
+min(pred_mat[][])
+
+max(pred_mat[][])
+```
+
+Such values are adjusted to ensure they are within the valid range for ratings:
+
+```{r}
+# set all vals > 10 to 10 to ensure items are within valid range
+pred_mat[,][pred_mat[,] > 10] <- 10
+
+# set all vals < -10 to -10
+pred_mat[,][pred_mat[,] < -10] <- -10
+```
+
+We can then compare the predicted ratings with the contents of the matrix containing the imputed ratings. Summary statistics for these two matrices show that the predicted ratings have a mean and median nearly identical to that of the imputed data:
+
+```{r}
+summary(as.vector(as.matrix(tjest)))
+summary(as.vector(pred_mat))
+```
+
+Histograms of the imputed and predicted values provide further confirmation that the their distributions are quite similar:
+
+```{r}
+par(mfrow=c(1,2))
+hist(as.vector(as.matrix(tjest)), main = "Dist. of Imputed Values", col = "yellow", xlab = "Imputed Values")
+
+hist(as.vector(pred_mat), main = "Dist. of Predicted Values", col = "yellow", xlab = "Predicted Values")
+```
+
+However, neither distribution appears to approximate the distribution of the approximately 248,000 non-missing ratings contained within the original matrix:
+
+```{r}
+par(mfrow= c(1,1))
+hist(as.vector(as.matrix(jester)), main = "Distribution of Non-Missing Jester Ratings", col = "yellow", xlab = "Ratings")
+```
+
+Boxplots of all three data sets highlight these disparities. As shown below, the interquartile range of the non-missing Jester ratings is far wider than that of either the SVD-predicted values or the imputed values.
+
+```{r}
+par(mfrow=c(1,3))
+
+boxplot(as.vector(as.matrix(jester)), main = "Dist. of Non-NA Jester Ratings", col = "yellow", ylab = "Ratings")
+
+boxplot(as.vector(as.matrix(tjest)), main = "Dist. of Imputed Values", col = "yellow", ylab = "Imputed Values")
+
+boxplot(as.vector(pred_mat), main = "Dist. of Predicted Values", col = "yellow", ylab = "Predicted Values")
+```
+
+As was mentioned earlier, these disparities are the result of filling the NA values contained within the original Jester data with values that are imputed for purposes of enabling an SVD calculation: Missing data is prohibitive for purposes of calculating an SVD, so missing values __must__ either be filled with relatively meaningful values or discarded in their entirety. 
+
+As a point of comparison, if we simply fill the NA values contained within the original Jester data with zeroes, the resulting histogram looks much more similar to those of the imputed and predicted values:
+
+```{r}
+par(mfrow=c(1,3))
+zjest <- jester
+zjest[is.na(zjest[,])] <- 0
+
+hist(as.vector(as.matrix(zjest)), main = "Dist. of Zero-Filled NA Jester Ratings", col = "yellow", xlab = "Ratings")
+
+hist(as.vector(as.matrix(tjest)), main = "Dist. of Imputed Values", col = "yellow", xlab = "Imputed Values")
+
+hist(as.vector(pred_mat), main = "Dist. of Predicted Values", col = "yellow", xlab = "Predicted Values")
+
+# memory cleanup
+rm(tjest, zjest)
+
+```
+
+As would be expected, the histogram clearly shows that simply zero-filling the missing values greatly reduces the variability of the data set. As such, our decision to impute rather than zero-fill or mean-fill the missing values may prove to have been a wise course of action. 
+
+_____
+
+# Evaluating the Predictions
+
+We now have three separate sets of ratings data:
+
+- The original 10,000 x 100 Jester ratings containing more than 752,000 missing values;
+
+- A 10,000 x 100 matrix containing the original non-NA Jester ratings and imputed values for the 752,000 missing values;
+
+- A 10,000 x 100 matrix representing the results of multiplying the dimensionality-reduced component matrices we obtained from our SVD efforts. This last matrix is essentially a set of predicted ratings.
+
+We'd like to determine whether or not the matrix generated by the SVD/dimensionality reduction process is a viable proxy for the original Jester ratings.  
+
+As a first step in this analysis, we can calculate the root mean square error (RMSE), mean squared error (MSE), and mean absolute error (MAE) of the differences between the original Jester data and the predicted ratings we obtained from the SVD/dimensionality reduction process:
+
+```{r}
+jest1 <- as(as.matrix(jester), "realRatingMatrix")
+
+p_vs_jest <- calcPredictionAccuracy(x = as(pred_mat, "realRatingMatrix"), data = jest1)
+kable(p_vs_jest)
+```
+
+We can then compare those results against the performance metrics obtained from both user-based and item-based collaborative filters derived from the original Jester ratings. During a prior collaborative filtering benchmarking effort (*see* https://rpubs.com/jt_rpubs/285729), we learned that the best performing user-based collaborative filter for the Jester data we are using herein makes use of Z-score normalization and a Euclidean Distance similarity function. We also learned that the best performing item-based collaborative filter relied on the raw, non-normalized data and a cosine similarity function. Such filters are defined and evaluated once more below.
+
+```{r}
+# split the data into the training and the test set:
+e1 <- evaluationScheme(jest1, method="split", train=0.8, given=15, goodRating=0)
+
+# user-based CF w Z-score normalization + Cosine distance
+UBCF_Z_E <- Recommender(getData(e1, "train"), "UBCF", 
+      param=list(normalize = "Z-score",method="Euclidean"))
+
+# item based CF w non-normalized + Cosine distance
+IBCF_N_C <- Recommender(getData(e1, "train"), "IBCF", 
+      param=list(normalize = NULL, method="Cosine"))
+
+Jp1 <- predict(UBCF_Z_E, getData(e1, "known"), type="ratings")
+
+Jp2 <- predict(IBCF_N_C, getData(e1, "known"), type="ratings")
+
+# memory cleanup
+rm(UBCF_Z_E, IBCF_N_C)
+
+# set all predictions that fall outside the valid range to the boundary values
+Jp1@data@x[Jp1@data@x[] < -10] <- -10
+Jp1@data@x[Jp1@data@x[] > 10] <- 10
+
+Jp2@data@x[Jp2@data@x[] < -10] <- -10
+Jp2@data@x[Jp2@data@x[] > 10] <- 10
+
+# aggregate the performance statistics
+errors <- rbind(
+  # jester data
+  UBCF_Z_C = calcPredictionAccuracy(Jp1, getData(e1, "unknown")),
+  IBCF_N_C = calcPredictionAccuracy(Jp2, getData(e1, "unknown"))
+)
+
+kable(errors)
+```
+
+The table above shows the performance statistics for the two collaborative filters. Neither the item-based filter nor the user-based filter appears to have outperformed the predictive accuracy of the SVD method.
+
+_____
+
+# Conclusions
+
+The table and barplot below summarize the performance of the SVD, user-based, and item-based models evaluated above, with the models sorted in ascending order according to their respective RMSE scores.
+
+```{r}
+par(mfrow=c(1,1))
+
+c_res <- data.frame(rbind(errors, p_vs_jest))
+
+c_res <- c_res[order(c_res$RMSE ),]
+
+kable(c_res)
+
+# las = 3: rotate x axis labels to perendicular; las = 1: rotate y axis labels
+barplot(c_res$RMSE, col = "yellow", main = "Barplot of Model RMSE's", las = 2, ylab = "RMSE", horiz = FALSE, names.arg = rownames(c_res), cex.names=.8)
+```
+
+The results show that use of SVD appears to be a very viable alternative to either user-based or item-based collaborative filtering for purposes of predicting Jester ratings. The RMSE obtained via the SVD approach is far lower than those obtained via either collaborative filtering approach, indicating that the SVD approach can provide more accurate predictions of ratings than can collaborative filtering. Additionally, as we saw earlier, use of SVD / dimensionality reduction reduces the amount of storage required to maintain the ratings by more than 56%. The combination of improved accuracy and a reduction in data storage requirements represents a strong argument in favor applying SVD methods to the subject data set.
