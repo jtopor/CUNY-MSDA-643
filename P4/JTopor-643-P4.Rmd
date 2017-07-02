@@ -1,0 +1,534 @@
+---
+title: 'Beyond Accuracy: Adding Greater Serendipity to a Recommender System'
+author: 'Author: James Topor'
+date: "June 24, 2017"
+output:
+  html_document:
+    highlight: tango
+    theme: cerulean
+    toc: yes
+    toc_depth: 2
+    toc_float:
+      collapsed: yes
+      number_sections: yes
+      smooth_scroll: no
+  pdf_document:
+    toc: yes
+    toc_depth: '2'
+---
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+library(recommenderlab)
+library(readr)
+library(matrixStats)
+library(knitr)
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+
+# turn off scientific notation
+options(scipen=999)
+
+set.seed(1)
+```
+
+
+# Introduction
+
+The purpose of this project is to implement multiple recommendation algorithms for an existing dataset of user-item ratings, and then extend the best performing recommendation system to promote a "business goal" such as greater serendipity, novelty, or diversity. 
+The data set to be used is comprised of music listening information for a set of 1,892 users of the __Last.fm__ online music system. The data set lists the artists to which each user has listened and also provides a "listen count" for each [user, artist] pair. A total of 17,632 distinct musical artists are represented within the data set, resulting in a total of 92,834 [user-listened artist] pairs.
+
+The data set was downloaded from the following website:
+
+- https://grouplens.org/datasets/hetrec-2011/
+
+From that site a file named __hetrec2011-lastfm-2k.zip__ containing a series of compressed files was downloaded and decompressed. The decompressed files are collectively too large to load onto Github, thereby requiring the use of locally-based versions instead.
+
+_____
+
+# Data Loading & Exploration
+
+We start by loading the __user_artist.dat__ file which contains the [user, artist] pairings along with the associated user listen counts. A count of the distinct user ID's provides verification that the file does, in fact contain 1,892 unique __Last.fm__ users.
+
+```{r}
+# load last.fm user_artists file
+lastfm <- read.table("c:/data/643/user_artists.dat", header = TRUE, sep = "", stringsAsFactors = FALSE)
+
+# count distinct users
+length(unique(lastfm$userID))
+```
+
+We then calculate the number of users who have listened to each artist listed within the file. The results of those calculations will allow us to determine which artists have the broadest appeal across the entire community of users represented within the data set. Use of R's __arrange()__, __summarise()__ and __group_by()__ functions allows us to perform the required calculations and sort the results in descending order using a single line of code:
+
+```{r}
+# calc number of users listening to each artist
+a_users <- arrange(summarise(group_by(lastfm, artistID), 
+                     TotalUsers = length(unique(userID)) ), desc(TotalUsers) )
+```
+
+A summary of the results shows that we have a highly right-skewed distribution, with the mean far exceeding the median value. Furthermore, the median number of listeners per artist is one. A histogram and boxplot of the results provide further confirmation of the skew.
+
+```{r}
+summary(a_users$TotalUsers)
+
+par(mfrow=c(1,2))
+hist(a_users$TotalUsers, col = "yellow", main = "Dist. of # of Listeners by Artist", breaks = 50, xlab = "Number of Listeners")
+
+boxplot(a_users$TotalUsers, col = "yellow", main = "Dist. of # of Listeners by Artist", ylab = "Number of Listeners")
+```
+
+Given that the listeners had 17,632 possible artists to choose from, such skew is to be expected. Since the retention of all 17,632 artists would necessarily result in an extremely sparse user-item matrix, we will retain only the top 400 artists as determined by the number of listeners. Fortunately, the output of the __arrange()__ function employed above makes this quite simple:
+
+```{r}
+# truncate at top 400
+top_400 <- a_users[1:400,]
+length(unique(top_400$artistID))
+```
+
+We can now match the artist ID's contained within the top 400 list to actual artist names by loading the __artists.dat__ file and simply extracting the names of the artists that correspond to the ID's listed in our top 400 list. We load the file using the __read_delim()__ function from R's __readr__ package and exclude the two unneeded columns containing URL's:
+
+```{r, message = FALSE, warning = FALSE}
+# load list of last.fm artists: drop columns containing URL's since they aren't needed
+lfm_art <- read_delim("c:/data/643/artists.dat", delim = "\t") %>% select(id, name)
+```
+
+A count of the distinct artists listed within the file reveals the presence of only 16,423 artists, not the 17,632 indicated by the authors of the data set:
+
+```{r}
+# count distinct artists: 16423 artists listed
+length(unique(lfm_art$id))
+```
+
+Furthermore, the artist ID's are not sequential, spanning a range of [1, 18745] despite only 16,423 artists being listed:
+
+```{r}
+# summary: range is 1 to 18745 despite only 16423 artists listed
+summary(lfm_art$id)
+```
+
+While it is unclear why these discrepancies exist (no explanation is available from the authors of the data set), since we will be limiting ourselves to a subset of only 400 artists we need not concern ourselves with them.
+
+We now extract the names of artists having the broadest appeal to our _Last.fm__ from the __artists.dat__ data. A data integrity check reveals that 26 of the 400 most listened to artists have no corresponding entry within the __artists.dat__ data. The missing entries are therefore identified for potential removal from our user-item matrix:
+
+```{r}
+# find names of artists with most last.fm fans
+most_fans <- subset(lfm_art, id %in% top_400$artistID)$name
+
+most_ids <- subset(lfm_art, id %in% top_400$artistID)$id
+
+missing <- subset(top_400, !(artistID %in% most_ids))
+kable(missing, caption = "Artist ID's Missing from artists.dat File")
+```
+
+Due to the lack of corresponding entries within the __artists.dat__ file, we have no way of knowing who these 26 artists might be. As such, they will be excluded from inclusion within our user-item matrix. As such, we remove all items from our data set that do not correspond to our top 400 artist ID's and also remove all items corresponding to the 26 non-identifiable artists. This leaves us with a data set comprised of the top 374 identifiable artists:
+
+```{r}
+# remove all items not in top 400 artist list
+last_sm <- subset(lastfm, artistID %in% top_400$artistID)
+
+# remove all artist ID's missing from artists.dat file
+last_sm <- subset(last_sm, !(artistID %in% missing$artistID))
+
+# form new master list of valid artist ID's excluding the 26 missing ones
+top_374 <- subset(top_400, !(artistID %in% missing$artistID))
+
+rm(top_400)
+```
+
+A check of the number of distinct users remaining in our data set after limiting the data to the 374 artists with broadest appeal reveals that we've retained 1,847 of the possible 1,892 total users. This is a strong indication that our "broadest artist appeal" approach is likely a valid method of improving the density of our anticipated user-item matrix: We've managed to retain __97.6%__ of our user base despite having discarded (17632 - 374) / 17632 = __97.87%__ of the artists.
+
+```{r}
+length(unique(last_sm$userID))
+```
+
+A list of the top 20 artists by listener count is shown below:
+
+```{r, message = FALSE, warning = FALSE}
+kable(head(cbind(most_fans, top_374$TotalUsers), 20), col.names = c("Artist", "Listeners"))
+```
+
+As we can see, these artists have been listened to by between 15.4% and 33.2% of the 1847 remaining users. We can now calculate the number of total possible ratings that will be contained within our user-item matrix:
+
+```{r}
+length(unique(last_sm$userID)) * length(unique(last_sm$artistID ))
+```
+
+As we can see, we will have a total of 690,778 possible ratings, which seems to be a reasonable size relative to the available computing resources. We now convert our reduced data set to a user-item matrix using R's __spread()__ function. Since the first column of the resulting matrix contains user ID's, that column is copied to a vector for future use and removed from the data before R's __as.matrix()__ function is used to convert the data frame containing the user-item matrix to an actual R matrix object:
+
+```{r}
+# convert to wide format
+l_mat <- spread(last_sm, artistID, weight)
+
+# save UserIDs and remove 1st column from matrix
+user_ids <- as.vector(l_mat$userID)
+
+# create a matrix using cols 2 -> ncol of l_mat
+lr_mat <- as.matrix(l_mat[,2:ncol(l_mat)])
+```
+
+We now perform a data integrity check to ensure that the resuling matrix does, in fact, contain a total of 690,778 possible ratings. Furthermore, we calculate the density and sparsity of the matrix:
+
+```{r}
+# calc number of ratings in matrix
+nratings <- length(as.vector(lr_mat))
+nratings
+
+# calc density of matrix = 0.05877
+sum(!is.na(as.vector(lr_mat)) ) / nratings
+
+# calc sparsity of matrix
+1 - sum(!is.na(as.vector(lr_mat)) ) / nratings
+```
+
+As shown above, the density of our matrix is __5.88%__, with a corresponding sparsity of __94.12%__.
+
+Summary statistics for the number of listens per artist show a huge variation in the number of times users have listened to various artists. We again see an extremely right-skewed distribution, with a small number of users having apparently listened to some artists tens of thousands of times:
+
+```{r}
+# find the summary
+summary(as.vector(lr_mat))
+par(mfrow=c(1,2))
+hist(as.vector(lr_mat), col = "yellow", main = "Dist. of # of Listens", breaks = 50, xlab = "Number of Listens")
+
+boxplot(as.vector(lr_mat), col = "yellow", main = "Dist. of # of Listens", ylab = "Number of Listens")
+
+raw_median <- median(as.vector(lr_mat), na.rm = TRUE )
+```
+
+Summary statistics for the number of users listening to each artist also demonstrate clear evidence of right-skew, with some artists having been listened to by hundreds of users while the median number of listeners per artist was 77 as shown below:
+
+```{r}
+# count number of non-NA's in each column of training set
+col_valid <- colSums(!is.na(lr_mat[,]))
+summary(col_valid)
+
+par(mfrow=c(1,2))
+hist(as.vector(col_valid), col = "yellow", main = "Dist. of # of Listeners", breaks = 50, xlab = "Number of Listeners")
+
+boxplot(as.vector(col_valid), col = "yellow", main = "Dist. of # of Listeners", ylab = "Number of Listeners")
+
+```
+
+The heavy right skew of the data indicates that the ratings will likely benefit from some form of normalization during model building.
+
+_____
+
+# Dealing with Missing Data Values
+
+Our data set is comprised of user listening counts for 374 musical artists accumulated from 1,847 total users, for a total of 690,778 possible listen counts. However, as we have seen, more than 94%, or approximately 650,000 possible listen counts are missing. Each missing listen count is implicitly informing us that the user has not listened to the related artist since __Last.fm__ automatically keeps track of how many times a user has listened to an artist. This suggests that it may be feasible to treat the data in a binary manner, with each missing value treated set equal to zero and each non-missing value set equal to one. The resulting recommender system would then be a reflection of a simple headcount popularity metric: each artist would be either more or less popular based solely on the raw number of users who had opted to listen to the artist's music at some point via the __Last.fm__ system.
+
+However, such an approach will necessarily result in the exclusion of the listen counts, which themselves provide an added dimension to the "popularity" measure of each artist: The more frequently an artist has been listened to is as relevant of a metric as the raw headcount of users who have listened to an artist.
+
+As such, two separate approaches will be applied to constructing a recommender system for the __Last.fm__ data: one which converts the listen count data to a binary format, and one which relies on the raw listen counts. This approach will allow us to directly compare the performance of each.
+
+A binary version of the data is generated by replacing all missing values with zeroes and converting all non-missing values to ones:
+
+```{r}
+# create binarized copy of data
+bin_lrmat <- lr_mat
+
+bin_lrmat[,][is.na(bin_lrmat[,])] <- 0
+bin_lrmat[,][bin_lrmat[,] > 0] <- 1
+```
+
+For the non-binary version of the data, the missing values could, in fact, be left as-is, particularly in light of the fact that they represent a completely objective metric (i.e., how many times has a user listened to a given artist) as opposed to being the result of a relatively subjective ex post facto rating process. While we could impute a value for each missing listen count based on a metric such as the median number of listens for each artist, doing so would severely limit our ability to directly compare our recommender model's performance against that of a recommender based on the binarized version of the data. As such, we will leave the missing values contained within the non-binarized version of the data "as is".
+
+With the two versions of the data set complete, we can now proceed with creating training and testing subsets for each.
+
+_____
+
+# Creating Training and Testing Subsets
+
+Prior to using any of the pre-built __recommenderlab__ functions for collaborative filtering we must first convert the data frame to either a __realRatingMatrix__ if the data are non-binary, or a __binaryRatingMatrix__ if the data are binary. This is done by first converting the data frame to an __R__ matrix, then converting that matrix to the appropriate format using the __as()__ function. We do this for both the binary and non-binary versions of the data.
+
+The __evaluationScheme()__ function from the recommenderlab package is then used to randomly split the resulting ratings matrices into training and testing subsets, with 80% of the data assigned to the training subset and 20% of the data assigned to the testing subset. We also assign a value to the function's __goodRating__ parameter for each version of the data. For the binary data, this is a simple matter since "good" ratings (representative of the fact that a __Last.fm__ user has listened to a particular artist) are represented by a "1". 
+
+For the listen count data, the choice of a "good" rating is much less obvious. Since we've already eliminated artists that were not widely listened to from the data set for simplification purposes, by definition those that remain are all likely to be widely-enjoyed artists. However, within the context of the remaining data there certainly are varying degrees of artist popularity as evidenced by the widely varying listen counts, with a median listen count of 313 having been observed earlier. While we could, in fact, use the median value as the minimum value for a "good" rating, doing so would necessarily assign one half of the available listen counts to the "not good" rating category. As a compromise, we assign a value of $313 - 100 = 213$ (indicated below as "raw_median - 100") as the minimum listen count required for a "good" rating. This value falls quite close to the center of the second quartile of the listen count's distribution, thereby allowing us to retain approximately 60% of the listen counts as signifying a "good" rating.
+
+```{r}
+# convert non-binary matrix to a recommenderlab realRatingMatrix
+rmat <- as(lr_mat,"realRatingMatrix")
+
+# split the listen count data into the training and the test set:
+e_counts <- evaluationScheme(rmat, method="split", train=0.8, given = 1, goodRating = raw_median - 100)
+
+# convert the binary matrix to a binaryRatingMatrix
+bmat <- as(bin_lrmat, "binaryRatingMatrix")
+
+# split the binary data into the training and the test set:
+e_bin <- evaluationScheme(bmat, method="split", train=0.8, given = 1, goodRating = 1)
+```
+
+_____
+
+# The Recommendation Algorithms
+
+We will now construct two separate recommendation algorithms with each one being based on a different version of the data. The first will be an item-based collaborative filter based on the binary version of the data we created earlier while the second will be a user-based collaborative filter based on the listen count data, inclusive of the missing values. Both systems will be asked to generate a "__Top N__" list of recommended musical artists for each member of our __Last.fm__ user group.
+
+For each recommender we will calculate performance metrics including precision, recall, the true positive rate (TPR), the false positive rate (FPR), and a confusion matrix. These metrics will allow us to assess the effectiveness of each model independently. Then, in the __Comparing the Models__ section below, we will compare the performance of the two models against each other in an attempt to determine whether one outperforms the other.
+
+_____
+
+### A Recommender Derived from the Binary Data
+
+To create an item-based collaborative filtering recommender system based on the binary version of our data we make use of the Jaccard distance metric according to the approach described on page 70 of Chapter 3 of __Building a Recommender System in R__. We will start by recommending up to 10 prospective musical artists to each user. The model is formulated and assessed in a stand-alone fashion below.
+
+```{r, warning = FALSE, message = FALSE}
+# build the item-based binary recommender using training subset
+b1 <- Recommender(getData(e_bin, "train"), "IBCF", 
+                          parameter = list(method = "Jaccard"))
+
+# set number of items to recommend
+n_recommended <- 10
+
+# make predictions on test set
+b_pred <- predict(b1, getData(e_bin, "known"), n = n_recommended, goodRating = 1)
+
+# check the accuracy of the predictions
+error_b <- calcPredictionAccuracy(b_pred, getData(e_bin, "unknown"), 
+                                  given = n_recommended, goodRating = 1)
+
+kable(error_b, caption = "Performance Metrics")
+```
+
+<br>
+
+The performance metrics for the model are shown above. As we can see, the precision and recall are both relatively low, as is the true positive rate. However, this does not necessarily imply that the recommendations generated by the system will not be of value to users of __Last.fm__. We can check the list of recommendations for the first few users to ensure that the system is, in fact, producing the expected 10 artist recommendations per user:
+
+```{r}
+b_pred@items[1:4]
+```
+
+As we can see above, the system does appear to be generating a list of 10 recommended artist ID's per user.
+
+To further assess the performance of the binary recommender we can make use of recommenderlab's __evaluate()__ function while varying the number of artists to be recommended to each user. Confusion matrix metrics are extracted from the results and displayed below.
+
+```{r}
+b_results <- evaluate(x = e_bin, method = 'IBCF', n = c(2, 3, 5, 7, 10, 15, 20, 30, 40),
+                       parameter = list(method = "Jaccard"))
+
+# getConfusionMatrix(b_results)[[1]]
+
+columns_to_sum <- c("TP", "FP", "FN", "TN")
+indices_summed <- Reduce("+", getConfusionMatrix(b_results))[, columns_to_sum]
+indices_summed
+```
+
+We can also plot an ROC curve and precision-recall curve to further assess the performance of the model:
+
+```{r}
+# Plot a ROC curve: TPR vs. FPR (true positive rate vs false positive rate)
+plot(b_results, annotate = TRUE, main = "Binary Recommender ROC curve", col = "red")
+
+# plot precision vs recall
+plot(b_results, "prec/rec", annotate = TRUE, main = "Precision-recall", col = "red")
+```
+
+The precision/recall curve shows that as we increase the number of artists we want recommendations for, the precision of the recommender will decrease. However, the recall will improve. This is in line with the behavior typically seen when assessing the tradeoff between precision and recall. 
+
+The ROC curve will be useful later when we compare our two models against one another.
+
+_____
+
+### A Recommender Derived from Listen Counts
+
+To create a user-based collaborative filtering recommender system based on the non-binary version of our data we make use of Z-score normalization and a Euclidean distance similarity metric. The model is formulated and assessed below.
+
+```{r}
+# user-based CF w Z-score normalization + Euclidean Distance similarity
+UBCF_Z_E <- Recommender(getData(e_counts, "train"), "UBCF",
+                    parameter = list(normalize = "z-score", method = "Euclidean"))
+
+# make predictions on testing subset
+c_pred <- predict(UBCF_Z_E, getData(e_counts, "known"), goodRating = raw_median - 100, n = n_recommended)
+
+# check accuracy of predictions
+error_c <- calcPredictionAccuracy(c_pred, getData(e_counts, "unknown"), goodRating = raw_median - 100, given = 1)
+error_c
+
+kable(error_c, caption = "Performance Metrics")
+```
+
+<br>
+
+The table above shows that, like the binary model, the precision, recall, and true positive rate of this model are quite low. However, as with the binary model above, this does not necessarily imply that the model will not yield useful recommendations to __Last.fm__ users. 
+
+As we can see below, the system does appear to be generating a list of 10 recommended artist ID's per user:
+
+```{r}
+c_pred@items[1:4]
+```
+
+To further assess the performance of the non-binary recommender we can make use of recommenderlab's __evaluate()__ function in the same manner as we did for the binary recommender.
+
+```{r}
+c_results <- evaluate(x = e_counts, method = 'UBCF', 
+                      n = c(2, 3, 5, 7, 10, 15, 20, 30, 40),
+                      parameter = list(normalize = "z-score", method = "Euclidean"))
+
+# getConfusionMatrix(c_results)[[1]]
+
+columns_to_sum <- c("TP", "FP", "FN", "TN")
+indices_summed <- Reduce("+", getConfusionMatrix(c_results))[, columns_to_sum]
+head(indices_summed)
+
+# Plot a ROC curve: TPR vs. FPR (true positive rate vs false positive rate)
+plot(c_results, annotate = TRUE, main = "ROC curve", col = "blue")
+
+# plot precision vs recall
+plot(c_results, "prec/rec", annotate = TRUE, main = "Precision-recall", col = "blue")
+```
+
+As with the binary model, we don't see anything unusual in the shapes of either the precision-recall curve or the ROC curve. 
+
+_____
+
+# Comparing the Models
+
+We can directly compare the performance of the two models by co-plotting the ROC and precision/recall curves. To do so requires that we extract the respective confusion matrix metrics from the recommenderlab data objects that were output from the __evaluate()__ function. A co-plot of the ROC curves is shown below.
+
+```{r}
+# extract binary confusion matrix metrics
+b_conf <- getConfusionMatrix(b_results)[[1]]
+b_conf <- as.data.frame(b_conf)
+
+# extract listen count confusion matrix metrics
+c_conf <- getConfusionMatrix(c_results)[[1]]
+c_conf <- as.data.frame(c_conf)
+
+# co-plot ROC curves
+plot(y = c_conf$TPR, x = c_conf$FPR, type = "o", col = "blue", xlab = "FPR", ylab = "TPR", xlim=c(0,0.10), ylim=c(0, 0.35))
+lines(y = b_conf$TPR, x = b_conf$FPR, col = "red", type = "o")
+# Add a legend
+legend(0.005, .35, legend=c("Listen Counts", "Binary"),
+       col=c("blue", "red"), lty=1:2, cex=0.8)
+title("Co-Plot of ROC curves")
+```
+
+The ROC curve co-plot clearly shows the binary model to be the better performer of the two models. While the ROC curve of the listen count model shows that model slightly outperforming the binary model for small values of $n$ (i.e., $n = (2, 3, 5)$) the binary model clearly outperforms the listen count model for values of $n >= 10$. 
+
+The co-plot of the precision-recall curves also shows the binary model to be the superior performer of the two, with the binary outperforming the listen count model across all values of $n$:
+
+```{r}
+# co-plot precision vs recall
+plot(y = c_conf$precision, x = c_conf$recall, type = "o", col = "blue", xlab = "FPR",
+     ylab = "TPR", xlim=c(0,0.35), ylim=c(0, 0.45))
+lines(y = b_conf$precision, x = b_conf$recall, col = "red", type = "o")
+legend(0.01, 0.1, legend=c("Listen Counts", "Binary"),
+       col=c("blue", "red"), lty=1:2, cex=0.8)
+title("Co-Plot of Precision vs Recall")
+```
+
+Therefore, the binary item-based collaborative filter model should be preferred for making "__Top N__" recommendations of musical artists to __Last.fm__ users over the user-based collaborative filter we constructed using the listen counts. 
+
+_____
+
+# Extending the Preferred Model: Adding "Serendipity"
+
+Now that we've selected a preferred model we can attempt to implement a change to it to promote a "business goal" such as greater serendipity, novelty, or diversity. As a first step, we will generate recommendations for all 1,847 __Last.fm__ users in our data set. However, instead of limiting our "Top N" list to 10 possible artists per user, we'll extend the list out to a maximum of 40 items per user in an attempt to capture possible "long tail" artists for each user.
+
+We start by generating the required recommendations for each user and checking a random user to ensure the artist ID's have been generated:
+
+```{r}
+n_recommended <- 40
+# now make predictions for every user with the binary recommender
+b_pred <- predict(b1, bmat, n = n_recommended, goodRating = 1)
+
+# check to ensure rec's created for all users
+b_pred@items[23]
+```
+
+As we can see above, the recommender is, in fact, generating the required artist ID recommendations. However, it is possible that the recommender engine may be recommending the ID's of artists to which the user already has an affinity as evidenced by their __Last.fm__ usage history. 
+
+Therefore, as a next step we should remove any artist ID's contained within each user's recommendation list that match any artist to which the user has already listened to through __Last.fm__. This check can be done by collecting the distinct artist ID's indicated for each of our user's within the original __user_artists.dat__ data we downloaded earlier and comparing them to the artist ID's generated by the recommender system. 
+
+After excluding such artists from the recommendation list, we can then attempt to add an aspect of __serendipity__ to the recommendations via the following:
+
+1. For the remaining "new" artists, randomly select seven of the top 10 for inclusion in a final list of artist recommendations;
+
+2. Then, randomly select an additional 3 artists from the remaining "long tail" of the recommendations for inclusion in a final list of artist recommendations;
+
+3. Merge the two sublists from steps 1 and 2 above to create a list of 10 recommended "Artists You May Enjoy" for the user;
+
+4. Scramble the order of the list of 10 created in step 3 so that they will be presented to the user in no particular order.
+
+This approach is implemented below. We start by initializing an empty data frame containing one row for each user ID and eleven columns, with the first column containing the user ID and the remaining ten each containing a recommended "new" artist for the user.
+
+```{r}
+# create a data frame to house 10 recommendations for each user
+user_tenrecs <- data.frame(matrix(ncol = 11, nrow = length(user_ids)))
+user_tenrecs[,1] <- user_ids
+
+colnames(user_tenrecs) <- c("userID", "r1", "r2", "r3", "r4", "r5",
+                            "r6", "r7", "r8", "r9", "r10")
+
+# load the recommendations from the recommender output object into a data frame
+for (i in 1:length(b_pred@items)){
+  
+  # get the recommended artists for the user
+  tmp_recs <- as.vector(b_pred@items[[i]])
+  
+  # get the length of rec vector for the user
+  num_trecs <- length(tmp_recs)
+
+  # get list of unique user's artists from original data
+  user_arts <- unique(subset(last_sm, userID == user_ids[i])$artistID)
+  
+  # eliminate artist that are already in user's playlist history
+  new_recs <- tmp_recs[!(tmp_recs %in% user_arts) ]
+
+  # get the length of new_rec vector
+  num_newrecs <- length(new_recs)
+  
+  # if to few recommendations generated, sample 10 at random from the top374
+  if(num_newrecs < 10) {
+    new_recs <- sample(top_374$artistID[!(top_374$artistID %in% user_arts)], 10)
+    
+  }
+  
+  # if too few recs to implement strategy, just use the first 10
+  if (num_newrecs < 13) {
+    topten <- new_recs[1:10]
+  } else {
+    # randomly select 7 of the top 10 remaining recommendations
+    t_seven <- sample(new_recs[1:10], 7)
+    
+    # then randomly select 3 of the remaining recommendations
+    t_three <- sample(new_recs[11:length(new_recs)], 3)
+    
+    # merge the two lists of artist ID's
+    topten <- c(t_seven, t_three)
+  } # end if else
+  
+  # scramble the top 10 so that they are randomly ordered
+  topten <- sample(topten, 10)
+  
+  # add recs to data frame
+  user_tenrecs[i,2:11 ] <- topten
+  
+} # end for loop
+```
+
+Now, when a __Last.fm__ user logs onto their account, we can offer them a list of ten musical artists that our recommender system believes they might enjoy. To simulate how this might work, we can randomly select a user ID and display their personalized list of recommended artists:
+
+```{r}
+# randomly select a user
+user <- sample(user_ids, 1)
+
+# fetch their recommendations
+urecs <- subset(user_tenrecs, userID == user)[2:11]
+
+# create list of artist names from artist ID's in list
+rec_names <- subset(lfm_art, id %in% urecs)$name
+kable(rec_names, col.names = "Artists You Might Enjoy")
+```
+
+Since we've ensured that the list presented above is devoid of the names of artists to which the user has previously listened to on __Last.fm__, each artist is "novel" to the user within the context of __Last.fm__.
+
+_____
+
+# Conclusion
+
+Our model building and evaluation efforts demonstrated that an item-based collaborative filtering recommender system constructed using a binary version of __Last.fm's__ user-artist listen counts outperformed a user-based collaborative filtering recommender system constructed using the raw listen counts. The binary recommender model was then extended via a series of data filters to add an aspect of "serendipity" or "novelty" to the recommender system. 
+
+Possible future work with the binary recommender model could include assessing in an online environment whether or not the suggested "Artists You Might Enjoy" lists lead users to explore artists they have not listened to previously on __Last.fm__. Such an assessment would necessarily require the addition of a mechanism to track click-through rates for those lists. Information gleaned from the click-through analysis might then be used to determine whether or not the implementation of the "Artists You Might Enjoy" lists results in any tangible changes in __Last.fm__ user behavior and/or system usage.
