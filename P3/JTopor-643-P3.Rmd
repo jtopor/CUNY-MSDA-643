@@ -133,8 +133,8 @@ for (i in 1:nrow(tjest)) {
           tjest[i,j] <- raw_mean + user_biases[i] + item_biases[j]
           
           # ensure new values are within valid ratings bounds
-          if (tjest[i,j] > 10) baseline[i,j] <- 10
-          if (tjest[i,j] < -10) baseline[i,j] <- -10
+          if (tjest[i,j] > 10) tjest[i,j] <- 10
+          if (tjest[i,j] < -10) tjest[i,j] <- -10
     } # end if
     
   } # end for j
