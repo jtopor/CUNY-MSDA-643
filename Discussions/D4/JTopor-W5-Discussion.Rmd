@@ -1,0 +1,52 @@
+---
+title: "643 Discussion 4"
+author: "James Topor"
+date: "July 5, 2017"
+output: html_document
+---
+
+### Problem Statement
+
+*Read the article below and consider how to handle attacks on recommender systems. Can you think of a similar example where a collective effort to alter the workings of content recommendations have been successful? How would you design a system to prevent this kind of abuse?*
+
+- https://www.washingtonpost.com/news/morning-mix/wp/2017/04/19/wisdom-of-the-crowd-imdb-users-gang-up-on-the-promise-before-it-even-opens/?utm_term=.329a75ece088
+
+_____
+
+### Collective Attacks on Recommender Systems
+
+Social media tools have made it very easy for groups of like-minded people to connect with one another, and in some instances this can be beneficial to society. However, such "tribalism" can also have many negative consequences, as evidenced by much of the seemingly unhinged political and social discourse that now pervades most forms of social media. In fact, the collective effort to negatively influence the perceived ratings of the movie "The Promise" as described in the Washington Post article was undoubtedly at least partially (if not largely) the result of the ease with which people who disapproved of the premise of the movie's storyline could be encouraged to post a negative review of the film prior to its release.
+
+Similar examples can easily be found within the heated political environment we are now experiencing here within the U.S.A.  For example, in September, 2015, Hillary Clinton campaign workers employed at her Brooklyn, NY office flooded __Amazon__ with negative reviews of a book titled "__The Clintons' War on Women__", as described here: 
+
+- http://dailycaller.com/2015/10/20/hillary-campaign-accused-of-trolling-anti-clinton-book-on-amazon/
+
+- http://www.dailymail.co.uk/news/article-3281013/Former-Trump-aide-says-Clinton-campaign-flooded-Amazon-negative-reviews-anti-Hillary-book-claims-Chelsea-Clinton-isn-t-Bill-s-daughter.html
+
+The ruse was discovered by __Amazon__ when they traced the reviews to a single IP address located at the Clinton campaign office. __Amazon__ subsequently removed all reviews emanating from that IP address. 
+
+Another example from the opposite side of the U.S.A.'s political spectrum occurred in November, 2016 when supporters of Donald Trump flooded __Amazon__ with negative reviews of a book written by former Fox News personality Megyn Kelly:
+
+- https://www.usatoday.com/story/news/politics/onpolitics/2016/11/23/amazon-trump-trolls-megyn-kelly-book/94324354/
+
+The Los Angeles Times claimed at the time that many of the negative reviews emanated from a pro-Donald Trump __Reddit__ user group.
+
+_____
+
+### Collective Attack Prevention
+
+Prevention of such attacks can be quite difficult, as evidenced by the ongoing struggles platforms such as __Facebook__, __Yelp__, and __Amazon__ have faced when attempting to curtail various types of "trolling" and/or fake reviews. While the source of the copious amount of negative reviews for the Hillary Clinton book was easily discovered due to their having emanated from a single traceable IP address, most social media enabled trolling can't be traced to a single source. __Amazon__ attempts to limit such disingenuous reviews by including a "Verified Purchase" indicator on each review, but even that approach is easily corrupted by compensated reviewers, as discussed here:
+
+- http://thewirecutter.com/blog/lets-talk-about-amazon-reviews/
+
+So while some form of verification that a commenter has actually purchased an item (or attended a movie, etc.) is a good first step in preventing fake reviews, additional measures are required. For example, intelligent text processing algorithms (perhaps constructed using deep learning enabled neural networks) can be used to parse reviews for language patterns or content that is either not typical of most reviews or varies substantively from the type of language normally used by a given reviewer. Any suspect reviews could then be flagged for further review/verification by a human quality control expert.
+
+In a similar vein, reviews and/or ratings could be weighted by a factor that reflects the integrity of each user's previous reviews, i.e., reliable reviews of long time system users could receive more prominence/weight than those of users who are relatively new to the system. This approach appears to be used to some extent by platforms like __Yelp__ and __Amazon__ (e.g., __Amazon__'s Vine program). 
+
+As we become ever more dependent on technology in our daily lives, it may actually become easier to prevent such collective attacks due to the ease with which various technology platforms can track our daily movements and activities. Given that such data collection is, in fact, a form of surveillance, it may one day be possible to prevent such attacks in their entirety as system users and their true habits, preferences, and activities become more easily identifiable. For example, how many people will want to risk posting a fake review if they know they could easily be identified and exposed as a fraudster? 
+
+In fact, China is already taking steps in that direction via the implementation of a "Social Rating" score for all Chinese citizens, whereby every citizen will be assigned a publicly available "ranking" indicative of the government's opinion of the citizen's "trustworthiness":
+
+- http://fortune.com/2016/11/29/china-social-control-credit-rating/
+
+While this might seem like something straight out of an episode of the "__Black Mirror__" television series (in particular, see Season 3, Episode 1, titled "Nosedive"), it demonstrates a way in which technology companies may, in the near future, be able to curtail such collective attacks.
