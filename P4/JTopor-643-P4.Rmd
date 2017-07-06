@@ -112,11 +112,20 @@ We now extract the names of artists having the broadest appeal to our _Last.fm__
 
 ```{r}
 # find names of artists with most last.fm fans
-most_fans <- subset(lfm_art, id %in% top_400$artistID)$name
+most_fans <- subset(top_400, artistID %in% lfm_art$id)
 
-most_ids <- subset(lfm_art, id %in% top_400$artistID)$id
+# re-arrange sort order to enable proper link to artist name
+most_fans <- arrange(most_fans, artistID, TotalUsers)
 
-missing <- subset(top_400, !(artistID %in% most_ids))
+# get names of artists
+mf_names <- subset(lfm_art, id %in% most_fans$artistID)
+
+most_fans$Name <- mf_names$name[mf_names$id %in% most_fans$artistID]
+
+most_fans <- arrange(most_fans, desc(TotalUsers))
+
+missing <- subset(top_400, !(artistID %in% most_fans$artistID))
+
 kable(missing, caption = "Artist ID's Missing from artists.dat File")
 ```
 
@@ -144,7 +153,7 @@ length(unique(last_sm$userID))
 A list of the top 20 artists by listener count is shown below:
 
 ```{r, message = FALSE, warning = FALSE}
-kable(head(cbind(most_fans, top_374$TotalUsers), 20), col.names = c("Artist", "Listeners"))
+kable(head(cbind(most_fans$Name, most_fans$TotalUsers), 20), col.names = c("Artist", "Listeners"))
 ```
 
 As we can see, these artists have been listened to by between 15.4% and 33.2% of the 1847 remaining users. We can now calculate the number of total possible ratings that will be contained within our user-item matrix:
@@ -480,7 +489,7 @@ for (i in 1:length(b_pred@items)){
   # get the length of new_rec vector
   num_newrecs <- length(new_recs)
   
-  # if to few recommendations generated, sample 10 at random from the top374
+  # if too few recommendations generated, sample 10 at random from the top374
   if(num_newrecs < 10) {
     new_recs <- sample(top_374$artistID[!(top_374$artistID %in% user_arts)], 10)
     
@@ -516,10 +525,11 @@ Now, when a __Last.fm__ user logs onto their account, we can offer them a list o
 user <- sample(user_ids, 1)
 
 # fetch their recommendations
-urecs <- subset(user_tenrecs, userID == user)[2:11]
+urecs <- sort(as.vector(subset(user_tenrecs, userID == user)[2:11]) )
 
 # create list of artist names from artist ID's in list
 rec_names <- subset(lfm_art, id %in% urecs)$name
+
 kable(rec_names, col.names = "Artists You Might Enjoy")
 ```
 
