@@ -467,7 +467,12 @@ for (i in 1:length(b_pred@items)){
 } # end for loop
 ```
 
-we can randomly select an Artist ID and display a list of recommended similar artists:
+
+_____
+
+### Display a List of 10 Recommended Artists for a Given User
+
+we can randomly select an User ID and display a list of recommended similar artists:
 
 ```{r}
 # randomly select a user
@@ -551,7 +556,7 @@ Need to use the original artist-genre matrix:
 # this is only here for random number generation: delete in production mode
 set.seed(42)
 
-# set rownames = artistID's for easy retrieval
+# set rownames = artistID's for easy retrieval - DON'T NEED THIS LINE OF CODE IN SHINY
 rownames(ag_mat) <- ag_artistID
 
 # extract the genre tagIDs from matrix and convert to numeric
