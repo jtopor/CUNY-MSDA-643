@@ -438,9 +438,9 @@ for (i in 1:length(b_pred@items)){
   # get the length of new_rec vector
   num_newrecs <- length(new_recs)
   
-  # if too few recommendations generated, sample 10 at random from the top374
+  # if too few recommendations generated, sample 10 at random from the top815
   if(num_newrecs < 10) {
-    new_recs <- sample(top_374$artistID[!(top_374$artistID %in% user_arts)], 10)
+    new_recs <- sample(top_815$artistID[!(top_815$artistID %in% user_arts)], 10)
     
   }
   
